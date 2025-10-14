@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "motivi_ai"
+version = "0.1.0"
+description = "Motivi_AI - Telegram planning assistant"
+authors = ["Timur-marii8st <4gg528@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.30.6"}
+aiogram = "^3.5.0"
+pydantic = "^2.9.2"
+pydantic-settings = "^2.5.2"
+sqlmodel = "^0.0.21"
+sqlalchemy = {version = "^2.0.34", extras = ["asyncio"]}
+asyncpg = "^0.29.0"
+google-genai = "^1.43.0"
+httpx = "^0.28.1"
+loguru = "^0.7.2"
+orjson = "^3.10.7"
+python-dotenv = "^1.0.1"
+tzdata = "^2024.1"
+pgvector = "^0.2.5"
+alembic = "^1.13.2"
+apscheduler = "^3.10.4"
+python-docx = "^1.1.0"
+aiofiles = "^24.1.0"
+pytz = "^2024.1"
+google-api-python-client = "^2.108.0"
+google-auth-oauthlib = "^1.2.0"
+google-auth-httplib2 = "^0.2.0"
+faster-whisper = "^1.0.0"
+pillow = "^10.3.0"
+ffmpeg-python = "^0.2.0"
+cryptography = "^42.0.5"
+redis = "^5.0.7"
+av = "15.1.0"
+psycopg2-binary = "^2.9.10"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6.9"
+black = "^24.8.0"
+mypy = "^1.11.1"
+pytest = "^8.3.2"
