@@ -39,6 +39,7 @@ class MemoryPack:
             "core_memory": {
                 "goals": self.core.goals_json,
                 "sleep_schedule": self.core.sleep_schedule_json,
+                "core_text": self.core.core_text,
             },
             "working_memory": {
                 "focus_summary": self.working.focus_summary,
@@ -63,8 +64,10 @@ class MemoryOrchestrator:
     Assembles full memory context (Core + Working + Episodic) for a given user and query.
     """
 
-    def __init__(self, episodic_service: EpisodicMemoryService):
+    def __init__(self, episodic_service: EpisodicMemoryService, core_service: CoreMemoryService, working_service: WorkingMemoryService):
         self.episodic_service = episodic_service
+        self.core_service = core_service
+        self.working_service = working_service
 
     async def assemble(
         self, session: AsyncSession, user: User, query_text: str, top_k: int = 5
@@ -72,9 +75,12 @@ class MemoryOrchestrator:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
         """
-        core = await CoreMemoryService.get_or_create(session, user.id)
-        working = await WorkingMemoryService.get_or_create(session, user.id)
-
+        core = await self.core_service.retrieve_similar(
+            session, user.id, fact_text=query_text, metadata=None
+        )
+        working = await self.working_service.retrieve_similar(
+            session, user.id, fact_text=query_text, metadata=None
+        )
         # RAG retrieval
         episodes = await self.episodic_service.retrieve_similar(
             session, user.id, query_text, top_k=top_k

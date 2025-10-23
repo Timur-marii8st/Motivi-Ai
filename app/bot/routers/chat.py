@@ -5,8 +5,11 @@ from loguru import logger
 
 from ...services.profile_services import get_or_create_user
 from ...services.episodic_memory_service import EpisodicMemoryService
+from ...services.core_memory_service import CoreMemoryService
+from ...services.working_memory_service import WorkingMemoryService
 from ...services.memory_orchestrator import MemoryOrchestrator
 from ...llm.conversation_service import ConversationService
+from ...services.extractor_service import ExtractorService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...services.tool_executor import ToolExecutor
 from ...mcp_client.client import MCPClient
@@ -15,9 +18,12 @@ from ...services.conversation_history_service import ConversationHistoryService
 
 router = Router(name="chat")
 
+extractor_service = ExtractorService()
 gemini_embeddings = GeminiEmbeddings()
 episodic_service = EpisodicMemoryService(gemini_embeddings)
-memory_orchestrator = MemoryOrchestrator(episodic_service)
+core_service = CoreMemoryService(gemini_embeddings)
+working_service = WorkingMemoryService(gemini_embeddings)
+memory_orchestrator = MemoryOrchestrator(episodic_service, core_service, working_service)
 conversation_service = ConversationService()
 
 
@@ -63,13 +69,8 @@ async def handle_chat(message: Message, session):
     # Save the updated history back to Redis
     await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
 
-    # Optionally: store this interaction as an episode (do selectively; not every message)
-    # We'll store when the user message likely describes a completed task or notable event.
     try:
-        lower_text = user_text.lower()
-        keywords = ("completed", "done", "finished", "achieved", "created", "submitted")
-        if any(kw in lower_text for kw in keywords) and len(user_text) > 10:
-            metadata = {"tg_message_id": message.message_id, "chat_id": message.chat.id}
-            await episodic_service.store_episode(session, user.id, "chat_interaction", user_text, metadata)
+        has_important_info = await extractor_service.find_write_important_info(user.id, session, user_text)
+        logger.info("Important info extraction for user {}: {}", user.id, has_important_info)
     except Exception as e:
         logger.exception("Failed to store episode for user %s: %s", user.id, e)

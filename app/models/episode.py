@@ -19,12 +19,10 @@ class Episode(SQLModel, table=True):
     user_id: int = Field(index=True, foreign_key="users.id")
     user: "User" = Relationship(back_populates="episodes")
 
-    type: str = Field(index=True, max_length=50)  # e.g., 'daily_summary', 'task_completed', 'milestone'
     text: str = Field(sa_column=Column(Text, nullable=False))
     metadata_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
-    
 
 
 class EpisodeEmbedding(SQLModel, table=True):

@@ -8,6 +8,11 @@ from ..db import AsyncSessionLocal
 from ..models.users import User
 from ..models.settings import UserSettings
 from ..services.proactive_flows import ProactiveFlows
+from ..config import settings
+from ..models.episode import Episode, EpisodeEmbedding
+from ..models.working_memory import WorkingMemory, WorkingEmbedding
+from datetime import timedelta, datetime
+from sqlmodel import delete
 
 async def morning_checkin_job(user_id: int):
     """Morning check-in job."""
@@ -135,3 +140,47 @@ async def habit_reminder_job(habit_id: int):
         
         await bot.send_message(user.tg_chat_id, message)
         logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
+
+    async def cleanup_expired_memories_job():
+        """Cleanup episodes older than EPISODE_LIFETIME_DAYS and working embeddings for stale working memory."""
+        logger.info("Running cleanup_expired_memories_job")
+        async with AsyncSessionLocal() as session:
+            try:
+                # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
+                life_days = float(settings.EPISODE_LIFETIME_DAYS)
+                cutoff = datetime.utcnow() - timedelta(days=life_days)
+
+                # find expired episode ids
+                result = await session.execute(
+                    select(Episode.id).where(Episode.created_at < cutoff)
+                )
+                expired_ids = [r for (r,) in result.all()]
+
+                if expired_ids:
+                    # delete embeddings
+                    await session.execute(delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids)))
+                    # delete episodes
+                    await session.execute(delete(Episode).where(Episode.id.in_(expired_ids)))
+                    await session.commit()
+                    logger.info("Deleted {} expired episodes and their embeddings", len(expired_ids))
+                else:
+                    logger.info("No expired episodes to delete")
+
+                # Working memory: remove WorkingEmbedding rows for working memories with decay_date passed
+                result = await session.execute(
+                    select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.utcnow().date())
+                )
+                stale_wm_ids = [r for (r,) in result.all()]
+
+                if stale_wm_ids:
+                    await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
+                    # Optionally, clear focus_summary and short_term_goals_json and reset decay_date
+                    await session.execute(
+                        delete(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
+                    )
+                    await session.commit()
+                    logger.info("Deleted embeddings and working memory for {} stale working memories", len(stale_wm_ids))
+                else:
+                    logger.info("No stale working memories found")
+            except Exception as e:
+                logger.exception("Error during cleanup_expired_memories_job: {}", e)

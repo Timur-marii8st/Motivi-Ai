@@ -29,9 +29,13 @@ async def init_db() -> None:
         # Enable pgvector
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         logger.info("pgvector extension enabled")
-        # Create all tables
-        await conn.run_sync(SQLModel.metadata.create_all)
-        logger.info("Database tables created/verified")
+        # In development only: create missing tables automatically for convenience.
+        # In production we rely on Alembic migrations (do not call create_all there).
+        if settings.ENV == "dev":
+            await conn.run_sync(SQLModel.metadata.create_all)
+            logger.info("Database tables created/verified (dev mode)")
+        else:
+            logger.info("Skipping SQLModel.metadata.create_all (ENV=%s)", settings.ENV)
 
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

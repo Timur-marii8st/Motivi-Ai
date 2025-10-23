@@ -2,11 +2,12 @@ from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select, and_, text
+from sqlmodel import select, and_
 from loguru import logger
 
 from ..models.episode import Episode, EpisodeEmbedding
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..config import settings
 
 class EpisodicMemoryService:
     """
@@ -27,6 +28,7 @@ class EpisodicMemoryService:
         """
         Store an episode and generate its embedding.
         """
+        # set created_at on Episode model; expiry handled at retrieval time using settings
         ep = Episode(user_id=user_id, type=type, text=text, metadata_json=metadata or {})
         session.add(ep)
         await session.flush()  # Get ep.id
@@ -52,7 +54,6 @@ class EpisodicMemoryService:
         user_id: int,
         query_text: str,
         top_k: int = 5,
-        type_filter: Optional[str] = None,
         days_back: Optional[int] = None,
     ) -> List[Episode]:
         """
@@ -66,11 +67,15 @@ class EpisodicMemoryService:
 
         # Build filters
         filters = [Episode.user_id == user_id]
-        if type_filter:
-            filters.append(Episode.type == type_filter)
+
+        # Enforce episode lifetime from settings if days_back not explicitly provided
+        life_days = settings.EPISODE_LIFETIME_DAYS
         if days_back:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
-            filters.append(Episode.created_at >= cutoff)
+        else:
+            # EPISODE_LIFETIME_DAYS may be float (e.g., 75.0); convert to timedelta using days
+            cutoff = datetime.utcnow() - timedelta(days=float(life_days))
+        filters.append(Episode.created_at >= cutoff)
 
         # Cosine similarity search with pgvector
         # We'll join Episode with EpisodeEmbedding and order by <=> (cosine distance)
