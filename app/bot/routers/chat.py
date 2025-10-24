@@ -15,6 +15,9 @@ from ...services.tool_executor import ToolExecutor
 from ...mcp_client.client import MCPClient
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
+from ...services.fact_cleanup_service import FactCleanupService
+
+
 
 router = Router(name="chat")
 
@@ -25,6 +28,7 @@ core_service = CoreMemoryService(gemini_embeddings)
 working_service = WorkingMemoryService(gemini_embeddings)
 memory_orchestrator = MemoryOrchestrator(episodic_service, core_service, working_service)
 conversation_service = ConversationService()
+fact_cleanup_service = FactCleanupService()
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -70,7 +74,14 @@ async def handle_chat(message: Message, session):
     await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
 
     try:
-        has_important_info = await extractor_service.find_write_important_info(user.id, session, user_text)
+        info_text = f"User: {user_text}\nAI Assistant: {reply}"
+        has_important_info = await extractor_service.find_write_important_info(user.id, session, info_text)
         logger.info("Important info extraction for user {}: {}", user.id, has_important_info)
     except Exception as e:
         logger.exception("Failed to store episode for user %s: %s", user.id, e)
+
+    try:
+        await fact_cleanup_service.clear_duplicate_facts(session, user.id)
+        logger.info("Cleared duplicate facts for user {}", user.id)
+    except Exception as e:
+        logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)

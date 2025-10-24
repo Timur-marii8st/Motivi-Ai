@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     MAX_MESSAGES_PER_MINUTE: int = 15
 
     REDIS_URL: str = "redis://redis:6379/0"
+    # Fact cleanup
+    # similarity threshold for deduplication (cosine similarity). Value in [0,1].
+    FACT_CLEANUP_SIMILARITY_THRESHOLD: float = 0.95
     
     @property
     def admin_ids(self) -> list[int]:
