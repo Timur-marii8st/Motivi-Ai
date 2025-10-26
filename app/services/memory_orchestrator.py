@@ -75,15 +75,28 @@ class MemoryOrchestrator:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
         """
-        core = await self.core_service.retrieve_similar(
-            session, user.id, fact_text=query_text, metadata=None
+        core_results = await self.core_service.retrieve_similar(
+            session, user.id, query_text=query_text
         )
-        working = await self.working_service.retrieve_similar(
-            session, user.id, fact_text=query_text, metadata=None
+        # core_service.retrieve_similar returns a list; we expect a single CoreMemory.
+        # Prefer the top hit when present, otherwise ensure a CoreMemory row exists.
+        if core_results:
+            core = core_results[0]
+        else:
+            core = await self.core_service.get_or_create(session, user.id)
+
+        working_results = await self.working_service.retrieve_similar(
+            session, user.id, query_text=query_text
         )
+        # working_service.retrieve_similar returns a list as well; take the top hit
+        # or fall back to creating/getting the working memory row.
+        if working_results:
+            working = working_results[0]
+        else:
+            working = await self.working_service.get_or_create(session, user.id)
         # RAG retrieval
         episodes = await self.episodic_service.retrieve_similar(
-            session, user.id, query_text, top_k=top_k
+            session, user.id, query_text=query_text
         )
 
         logger.debug(

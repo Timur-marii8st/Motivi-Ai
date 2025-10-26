@@ -10,6 +10,8 @@ from ...services.vision_service import analyze_photo
 from ...llm.conversation_service import ConversationService
 from ...services.memory_orchestrator import MemoryOrchestrator
 from ...services.episodic_memory_service import EpisodicMemoryService
+from ...services.core_memory_service import CoreMemoryService
+from ...services.working_memory_service import WorkingMemoryService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...mcp_client.client import MCPClient
 from ...services.tool_executor import ToolExecutor
@@ -21,7 +23,9 @@ router = Router(name="multimodal")
 # Singletons
 gemini_embeddings = GeminiEmbeddings()
 episodic_service = EpisodicMemoryService(gemini_embeddings)
-memory_orchestrator = MemoryOrchestrator(episodic_service)
+core_service = CoreMemoryService(gemini_embeddings)
+working_service = WorkingMemoryService(gemini_embeddings)
+memory_orchestrator = MemoryOrchestrator(episodic_service, core_service, working_service)
 conversation_service = ConversationService()
 
 

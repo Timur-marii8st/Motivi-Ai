@@ -8,6 +8,8 @@ from ..models.users import User
 from ..config import settings
 from ..services.memory_orchestrator import MemoryOrchestrator
 from ..services.episodic_memory_service import EpisodicMemoryService
+from ..services.core_memory_service import CoreMemoryService
+from ..services.working_memory_service import WorkingMemoryService
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 from ..llm.conversation_service import ConversationService
 from ..mcp_client.client import MCPClient
@@ -24,6 +26,8 @@ class ProactiveFlows:
         # Services
         self.gemini_embeddings = GeminiEmbeddings()
         self.episodic_service = EpisodicMemoryService(self.gemini_embeddings)
+        self.core_service = CoreMemoryService(self.gemini_embeddings)
+        self.working_service = WorkingMemoryService(self.gemini_embeddings)
         self.memory_orchestrator = MemoryOrchestrator(self.episodic_service)
         self.conversation_service = ConversationService()
         

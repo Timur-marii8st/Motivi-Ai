@@ -1,6 +1,7 @@
-from typing import Optional, TYPE_CHECKING 
+from typing import Optional, TYPE_CHECKING
 from datetime import datetime
-from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship, Text
+from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
+from sqlalchemy import Text
 from pgvector.sqlalchemy import Vector
 
 if TYPE_CHECKING:
@@ -13,7 +14,9 @@ class CoreMemory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
     goals_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    core_text: Text = Field(sa_column=Column(Text, nullable=True))    
+    # Use a plain Python type for annotations so pydantic can generate a schema.
+    # Keep the SQLAlchemy Text column via `sa_column` so the DB column is Text.
+    core_text: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))    
     sleep_schedule_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
@@ -28,6 +31,7 @@ class CoreEmbedding(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     core_memory_id: int = Field(unique=True, foreign_key="core_memory.id", index=True)
 
-    embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
+    # Annotate as list[float] (embedding vector) so pydantic can validate the field.
+    embedding: list[float] = Field(sa_column=Column(Vector(1536), nullable=False))
 
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)

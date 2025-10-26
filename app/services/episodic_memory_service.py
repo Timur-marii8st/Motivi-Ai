@@ -22,20 +22,20 @@ class EpisodicMemoryService:
         session: AsyncSession,
         user_id: int,
         type: str,
-        text: str,
+        fact_text: str,
         metadata: Optional[dict] = None,
     ) -> Episode:
         """
         Store an episode and generate its embedding.
         """
         # set created_at on Episode model; expiry handled at retrieval time using settings
-        ep = Episode(user_id=user_id, type=type, text=text, metadata_json=metadata or {})
+        ep = Episode(user_id=user_id, type=type, text=fact_text, metadata_json=metadata or {})
         session.add(ep)
         await session.flush()  # Get ep.id
 
         # Generate embedding
         try:
-            emb_vector = await self.embeddings.embed(text, task_type="retrieval_document")
+            emb_vector = await self.embeddings.embed(fact_text, task_type="retrieval_document")
             if not emb_vector:
                 raise ValueError("Empty embedding returned")
             ep_emb = EpisodeEmbedding(episode_id=ep.id, embedding=emb_vector)
