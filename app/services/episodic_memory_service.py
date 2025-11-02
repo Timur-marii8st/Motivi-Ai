@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, and_
+from sqlalchemy.sql import func
 from loguru import logger
 
 from ..models.episode import Episode, EpisodeEmbedding
@@ -71,11 +72,16 @@ class EpisodicMemoryService:
         # Enforce episode lifetime from settings if days_back not explicitly provided
         life_days = settings.EPISODE_LIFETIME_DAYS
         if days_back:
-            cutoff = datetime.utcnow() - timedelta(days=days_back)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
         else:
             # EPISODE_LIFETIME_DAYS may be float (e.g., 75.0); convert to timedelta using days
-            cutoff = datetime.utcnow() - timedelta(days=float(life_days))
-        filters.append(Episode.created_at >= cutoff)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=float(life_days))
+        
+        # Ensure datetime comparison is timezone-aware
+        # This replaces any naive datetime (without timezone) with a UTC-aware one
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        filters.append(func.timezone('UTC', Episode.created_at) >= cutoff)
 
         # Cosine similarity search with pgvector
         # We'll join Episode with EpisodeEmbedding and order by <=> (cosine distance)

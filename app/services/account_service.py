@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import select, delete
@@ -53,12 +53,12 @@ class AccountService:
         pc = user.profile_completeness
         
         export = {
-            "export_date": datetime.utcnow().isoformat(),
+            "export_date": datetime.now(timezone.utc).isoformat(),
             "user": {
                 "id": user.id,
                 "name": user.name,
                 "age": user.age,
-                "timezone": user.timezone,
+                "timezone": user.user_timezone,
                 "wake_time": user.wake_time.isoformat() if user.wake_time else None,
                 "bed_time": user.bed_time.isoformat() if user.bed_time else None,
                 "occupation": user.occupation_json,

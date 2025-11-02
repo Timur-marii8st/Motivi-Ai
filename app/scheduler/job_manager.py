@@ -19,11 +19,11 @@ class JobManager:
         """
         Schedule or reschedule all jobs for a user based on their timezone and preferences.
         """
-        if not user.timezone:
+        if not user.user_timezone:
             logger.warning("User {} has no timezone; skipping job scheduling", user.id)
             return
 
-        tz = ZoneInfo(user.timezone)
+        tz = ZoneInfo(user.user_timezone)
         
         # Morning check-in
         if settings.enable_morning_checkin and user.wake_time:
@@ -101,13 +101,13 @@ class JobManager:
         from ..models.users import User
         
         user = await session.get(User, user_id)
-        if not user or not user.timezone:
+        if not user or not user.user_timezone:
             return
         
         habits = await HabitService.list_habits(session, user_id, active_only=True)
         
         from zoneinfo import ZoneInfo
-        tz = ZoneInfo(user.timezone)
+        tz = ZoneInfo(user.user_timezone)
         
         for habit in habits:
             if habit.reminder_enabled and habit.reminder_time:

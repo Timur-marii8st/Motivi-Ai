@@ -1,5 +1,5 @@
 from typing import Optional, List, TYPE_CHECKING
-from datetime import datetime, time
+from datetime import datetime, timezone, time
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
 
 
@@ -25,7 +25,7 @@ class User(SQLModel, table=True):
     name: Optional[str] = None
     age: Optional[int] = None
 
-    timezone: Optional[str] = Field(default=None, index=True)
+    user_timezone: Optional[str] = Field(default=None, index=True)
     wake_time: Optional[time] = None
     bed_time: Optional[time] = None
 
@@ -33,8 +33,8 @@ class User(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
 
     # --- Relationships ---
     # One-to-One relationships
@@ -50,4 +50,4 @@ class User(SQLModel, table=True):
     oauth_tokens: List["OAuthToken"] = Relationship(back_populates="user")
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)

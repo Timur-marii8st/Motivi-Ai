@@ -1,7 +1,7 @@
 from __future__ import annotations
 from aiogram import Router, F
 from aiogram.types import Message
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from loguru import logger
 
 from ...services.profile_services import get_or_create_user
@@ -48,7 +48,7 @@ async def break_cmd(message: Message, session):
         await message.answer("Usage: /break [1d|3d|1w|off]\nExamples: /break 1d, /break 1w, /break off")
         return
     
-    until = datetime.utcnow() + delta
+    until = datetime.now(timezone.utc) + delta
     
     settings.break_mode_active = True
     settings.break_mode_until = until
@@ -80,7 +80,7 @@ async def export_data_cmd(message: Message, session):
         temp_path = f.name
     
     # Send file
-    doc = FSInputFile(temp_path, filename=f"motivi_data_{user.id}_{datetime.utcnow().strftime('%Y%m%d')}.json")
+    doc = FSInputFile(temp_path, filename=f"motivi_data_{user.id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json")
     await message.answer_document(doc, caption="📦 Your complete Motivi_AI data export (GDPR compliant)")
     
     import os

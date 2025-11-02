@@ -10,6 +10,8 @@ from ...utils.validators import is_valid_timezone, clamp_age
 from ...utils.timeparse import parse_hhmm
 from ..states import ProfileEdit
 from ...config import settings
+import html
+import json
 
 router = Router(name="profile")
 
@@ -23,15 +25,15 @@ async def profile_cmd(message: Message, session):
     text = (
         f"<b>👤 Your Profile</b>\n\n"
         f"<b>Basic Info:</b>\n"
-        f"• Name: {user.name or 'Not set'}\n"
+    f"• Name: {html.escape(user.name) if user.name else 'Not set'}\n"
         f"• Age: {user.age or 'Not set'}\n"
-        f"• Timezone: {user.timezone or 'Not set'}\n"
+        f"• Timezone: {user.user_timezone or 'Not set'}\n"
         f"• Wake time: {user.wake_time or 'Not set'}\n"
         f"• Bedtime: {user.bed_time or 'Not set'}\n\n"
         f"<b>Occupation:</b>\n"
-        f"{user.occupation_json.get('title', 'Not set') if user.occupation_json else 'Not set'}\n\n"
+    f"{html.escape(user.occupation_json.get('title', 'Not set')) if user.occupation_json else 'Not set'}\n\n"
         f"<b>Goals:</b>\n"
-        f"{core.goals_json if core.goals_json else 'Not set'}\n\n"
+    f"{html.escape(json.dumps(core.goals_json, ensure_ascii=False)) if core.goals_json else 'Not set'}\n\n"
         f"<b>Profile Completeness:</b> {pc.score * 100:.0f}%\n"
         f"<b>Total Interactions:</b> {pc.total_interactions}\n"
     )
@@ -60,7 +62,7 @@ async def save_name(message: Message, state: FSMContext, session):
     await ProfileCompletenessService.update_score(session, user.id)
     await session.commit()
     
-    await message.answer(f"✅ Name updated to <b>{user.name}</b>")
+    await message.answer(f"✅ Name updated to <b>{html.escape(user.name)}</b>")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_age")
@@ -109,7 +111,7 @@ async def save_timezone(message: Message, state: FSMContext, session):
     settings = await SettingsService.get_or_create(session, user.id)
     JobManager.schedule_user_jobs(user, settings)
     
-    await message.answer(f"✅ Timezone updated to <b>{tz}</b>. Your scheduled jobs have been rescheduled.")
+    await message.answer(f"✅ Timezone updated to <b>{html.escape(tz)}</b>. Your scheduled jobs have been rescheduled.")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_times")
@@ -152,7 +154,7 @@ async def save_bed_time(message: Message, state: FSMContext, session):
     settings = await SettingsService.get_or_create(session, user.id)
     JobManager.schedule_user_jobs(user, settings)
     
-    await message.answer(f"✅ Times updated: Wake <b>{wake}</b>, Bed <b>{bed}</b>. Jobs rescheduled.")
+    await message.answer(f"✅ Times updated: Wake <b>{html.escape(str(wake))}</b>, Bed <b>{html.escape(str(bed))}</b>. Jobs rescheduled.")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_goals")
@@ -184,7 +186,7 @@ async def save_goals(message: Message, state: FSMContext, session):
     await ProfileCompletenessService.update_score(session, user.id)
     await session.commit()
     
-    await message.answer(f"✅ Goals updated:\n<code>{goals_json}</code>")
+    await message.answer(f"✅ Goals updated:\n<code>{html.escape(json.dumps(goals_json, ensure_ascii=False))}</code>")
     await state.clear()
 
 @router.callback_query(F.data == "profile_delete_account")

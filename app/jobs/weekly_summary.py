@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
@@ -46,6 +46,6 @@ async def generate_weekly_summary_for_user(session: AsyncSession, user: User, ep
 
     # Refresh working memory
     await WorkingMemoryService.refresh_weekly(
-        session, user.id, summary_text, {"goals": goals, "updated": datetime.utcnow().isoformat()}
+        session, user.id, summary_text, {"goals": goals, "updated": datetime.now(timezone.utc).isoformat()}
     )
     logger.info("Weekly summary refreshed for user {}", user.id)

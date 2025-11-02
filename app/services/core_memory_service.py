@@ -2,7 +2,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from ..models.core_memory import CoreMemory, CoreEmbedding
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
@@ -28,7 +28,7 @@ class CoreMemoryService:
     async def update_goals(session: AsyncSession, user_id: int, goals: dict) -> CoreMemory:
         cm = await CoreMemoryService.get_or_create(session, user_id)
         cm.goals_json = goals
-        cm.updated_at = datetime.utcnow()
+        cm.updated_at = datetime.now(timezone.utc)
         session.add(cm)
         return cm
 
@@ -36,7 +36,7 @@ class CoreMemoryService:
     async def update_sleep_schedule(session: AsyncSession, user_id: int, schedule: dict) -> CoreMemory:
         cm = await CoreMemoryService.get_or_create(session, user_id)
         cm.sleep_schedule_json = schedule
-        cm.updated_at = datetime.utcnow()
+        cm.updated_at = datetime.now(timezone.utc)
         session.add(cm)
         return cm
     
@@ -56,7 +56,7 @@ class CoreMemoryService:
         # Update core text and metadata on the user's core memory
         cm.core_text = fact_text
         # there is no metadata_json field on CoreMemory; we'll ignore or log metadata
-        cm.updated_at = datetime.utcnow()
+        cm.updated_at = datetime.now(timezone.utc)
         session.add(cm)
         await session.flush()  # ensure cm.id is available
 
@@ -71,7 +71,7 @@ class CoreMemoryService:
             existing = result.scalar_one_or_none()
             if existing:
                 existing.embedding = emb_vector
-                existing.created_at = datetime.utcnow()
+                existing.created_at = datetime.now(timezone.utc)
                 session.add(existing)
                 await session.flush()
                 logger.info("Updated embedding for core_memory {} (user {})", cm.id, user_id)

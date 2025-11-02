@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 from loguru import logger
 
 from ..models.users import User
+from ..models.task import Task
 from ..models.core_memory import CoreMemory
 from ..models.working_memory import WorkingMemory
 from ..models.episode import Episode
@@ -19,11 +21,15 @@ class MemoryPack:
         core: CoreMemory,
         working: WorkingMemory,
         episodes: List[Episode],
+        tasks: Optional[List[Task]] = None,
     ):
         self.user = user
         self.core = core
         self.working = working
         self.episodes = episodes
+        # tasks are fetched eagerly during assemble to avoid lazy-loading
+        # outside of the async DB context which triggers MissingGreenlet
+        self.tasks = tasks or []
 
     def to_context_dict(self) -> Dict[str, Any]:
         """Serialize for LLM prompt injection."""
@@ -31,10 +37,19 @@ class MemoryPack:
             "user_profile": {
                 "name": self.user.name,
                 "age": self.user.age,
-                "timezone": self.user.timezone,
+                "timezone": self.user.user_timezone,
                 "wake_time": self.user.wake_time.isoformat() if self.user.wake_time else None,
                 "bed_time": self.user.bed_time.isoformat() if self.user.bed_time else None,
                 "occupation": self.user.occupation_json,
+                # tasks is a list of dicts with minimal task info
+                "tasks": [
+                    {
+                        "title": t.title,
+                        "status": t.status,
+                        "due_dt": t.due_dt.isoformat() if getattr(t, "due_dt", None) else None,
+                    }
+                    for t in self.tasks
+                ],
             },
             "core_memory": {
                 "goals": self.core.goals_json,
@@ -48,10 +63,8 @@ class MemoryPack:
             },
             "relevant_episodes": [
                 {
-                    "type": ep.type,
                     "text": ep.text,
                     "date": ep.created_at.isoformat(),
-                    "metadata": ep.metadata_json,
                 }
                 for ep in self.episodes
             ],
@@ -102,4 +115,11 @@ class MemoryOrchestrator:
         logger.debug(
             "Assembled memory pack for user {}: {} episodes retrieved", user.id, len(episodes)
         )
-        return MemoryPack(user=user, core=core, working=working, episodes=episodes)
+
+        # Eagerly load tasks using the provided async session so we don't
+        # trigger a lazy load later outside of the DB context (which causes
+        # the MissingGreenlet error).
+        tasks_result = await session.execute(select(Task).where(Task.user_id == user.id))
+        tasks = tasks_result.scalars().all()
+
+        return MemoryPack(user=user, core=core, working=working, episodes=episodes, tasks=tasks)

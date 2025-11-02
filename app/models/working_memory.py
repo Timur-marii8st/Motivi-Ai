@@ -1,5 +1,5 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime, date
+from datetime import datetime, timezone, date
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
 from pgvector.sqlalchemy import Vector
 
@@ -22,7 +22,7 @@ class WorkingMemory(SQLModel, table=True):
     short_term_goals_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     decay_date: Optional[date] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
     user: "User" = Relationship(back_populates="working_memory")
 
 class WorkingEmbedding(SQLModel, table=True):
@@ -36,4 +36,4 @@ class WorkingEmbedding(SQLModel, table=True):
 
     embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)

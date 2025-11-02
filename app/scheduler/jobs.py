@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -84,11 +84,11 @@ async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
     if not settings or not settings.break_mode_active:
         return False
     
-    if settings.break_mode_until and settings.break_mode_until > datetime.utcnow():
+    if settings.break_mode_until and settings.break_mode_until > datetime.now(timezone.utc):
         return True
     
     # Expired; deactivate
-    if settings.break_mode_until and settings.break_mode_until <= datetime.utcnow():
+    if settings.break_mode_until and settings.break_mode_until <= datetime.now(timezone.utc):
         settings.break_mode_active = False
         settings.break_mode_until = None
         session.add(settings)
@@ -148,7 +148,7 @@ async def cleanup_expired_memories_job():
         try:
             # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
             life_days = float(settings.EPISODE_LIFETIME_DAYS)
-            cutoff = datetime.utcnow() - timedelta(days=life_days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=life_days)
 
             # find expired episode ids
             result = await session.execute(
@@ -168,7 +168,7 @@ async def cleanup_expired_memories_job():
 
             # Working memory: remove WorkingEmbedding rows for working memories with decay_date passed
             result = await session.execute(
-                select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.utcnow().date())
+                select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.now(timezone.utc).date())
             )
             stale_wm_ids = [r for (r,) in result.all()]
 

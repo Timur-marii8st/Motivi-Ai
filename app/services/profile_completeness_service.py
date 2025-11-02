@@ -1,7 +1,7 @@
 from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 
 from ..models.profile_completeness import ProfileCompleteness
@@ -46,7 +46,7 @@ class ProfileCompletenessService:
         fields = [
             (user.name, 10),
             (user.age, 5),
-            (user.timezone, 10),
+            (user.user_timezone, 10),
             (user.wake_time, 8),
             (user.bed_time, 8),
             (user.occupation_json, 15),
@@ -79,7 +79,7 @@ class ProfileCompletenessService:
         new_score = await ProfileCompletenessService.calculate_score(session, user_id)
         
         pc.score = new_score
-        pc.last_profile_update = datetime.utcnow()
+        pc.last_profile_update = datetime.now(timezone.utc)
         pc.touch()
         session.add(pc)
         await session.flush()

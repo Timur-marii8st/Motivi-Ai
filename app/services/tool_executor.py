@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,8 +30,6 @@ class ToolExecutor:
                 return await self._create_calendar_event(args, user_id)
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
-            elif tool_name == "log_habit_completion":
-                return await self._log_habit(args, user_id)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -42,7 +40,7 @@ class ToolExecutor:
     async def _create_calendar_event(self, args: Dict, user_id: int) -> Dict:
         """Create calendar event."""
         from ..integrations.google_calendar import GoogleCalendarService
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         start_dt = datetime.fromisoformat(args["start_datetime"])
         end_dt = datetime.fromisoformat(args["end_datetime"])
@@ -64,7 +62,7 @@ class ToolExecutor:
     async def _check_availability(self, args: Dict, user_id: int) -> Dict:
         """Check calendar availability."""
         from ..integrations.google_calendar import GoogleCalendarService
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         start_dt = datetime.fromisoformat(args["start_datetime"])
         end_dt = datetime.fromisoformat(args["end_datetime"])
@@ -74,18 +72,6 @@ class ToolExecutor:
         )
         
         return {"success": True, "available": available}
-
-    async def _log_habit(self, args: Dict, user_id: int) -> Dict:
-        """Log habit completion."""
-        from ..services.habit_service import HabitService
-        from datetime import date
-        
-        habit_id = args["habit_id"]
-        count = args.get("count", 1)
-        
-        log = await HabitService.log_habit(self.session, habit_id, date.today(), count=count)
-    
-        return {"success": True, "log_id": log.id}
     
     async def _create_and_send_plan(self, args: Dict, chat_id: int, user_id: int) -> Dict:
         """Create docx, send"""

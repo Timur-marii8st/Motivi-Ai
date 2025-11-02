@@ -53,6 +53,7 @@ class ConversationService:
         tool_executor: ToolExecutor,
         session: AsyncSession,
         conversation_history: Optional[List[Content]] = None,
+        user_time: str = "00:00",
     ) -> Tuple[str, List[Content]]:
         """
         Generate a response with potential tool calls.
@@ -60,15 +61,15 @@ class ConversationService:
         """
         context_dict = memory_pack.to_context_dict()
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
-
-        system_instruction = f"{self.persona_prompt}\n\n{context_block}"
+        time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
+        system_instruction = f"{self.persona_prompt}\n\n{context_block}\n\n{time_block}"
         
         messages = conversation_history or []
 
         gemini_config = GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=self.tools,
-                max_output_tokens=2000,
+                max_output_tokens=4084,
                 temperature=0.7,
                 top_p=0.95,
                 top_k=40,

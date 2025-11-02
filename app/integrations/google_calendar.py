@@ -2,7 +2,7 @@ from __future__ import annotations
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 import asyncio
 from google.oauth2.credentials import Credentials
@@ -117,7 +117,11 @@ class GoogleCalendarService:
 
         if token_record:
             token_record.encrypted_token_blob = encrypted_blob
-            token_record.token_expiry = creds.expiry
+            # Normalize expiry to timezone-aware UTC if possible to avoid DB driver errors
+            expiry = getattr(creds, "expiry", None)
+            if expiry is not None and expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            token_record.token_expiry = expiry
             # token_record.touch() may be defined on the model; call if present
             if hasattr(token_record, "touch"):
                 token_record.touch()
@@ -126,7 +130,7 @@ class GoogleCalendarService:
                 user_id=user_id,
                 provider="google_calendar",
                 encrypted_token_blob=encrypted_blob,
-                token_expiry=creds.expiry,
+                token_expiry=(creds.expiry.replace(tzinfo=timezone.utc) if creds.expiry and creds.expiry.tzinfo is None else creds.expiry),
             )
             session.add(token_record)
 
@@ -222,7 +226,7 @@ class GoogleCalendarService:
         try:
             service = await asyncio.to_thread(build, "calendar", "v3", credentials=creds)
 
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).isoformat() + "Z"
             events_result = await asyncio.to_thread(
                 lambda: service.events()
                 .list(calendarId="primary", timeMin=now, maxResults=max_results, singleEvents=True, orderBy="startTime")

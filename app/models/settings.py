@@ -1,5 +1,5 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime, time
+from datetime import datetime, timezone, time
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
 
 
@@ -38,8 +38,8 @@ class UserSettings(SQLModel, table=True):
         default=None, sa_column=Column(JSON)
     )  # e.g., {"include_habits": true, "include_calendar": true}
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)

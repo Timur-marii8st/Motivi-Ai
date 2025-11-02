@@ -81,24 +81,10 @@ TOOL_CHECK_AVAILABILITY = {
     },
 }
 
-TOOL_LOG_HABIT = {
-    "name": "log_habit_completion",
-    "description": "Log that the user completed a habit today.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "habit_id": {"type": "integer", "description": "Habit ID"},
-            "count": {"type": "integer", "description": "Number of completions (default 1)"},
-        },
-        "required": ["habit_id"],
-    },
-}
-
 ALL_TOOLS = [
     TOOL_CREATE_DOCX,
     TOOL_CREATE_TASK,
     SEND_TELEGRAM_MESSAGE_AND_PIN,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
-    TOOL_LOG_HABIT, 
 ]

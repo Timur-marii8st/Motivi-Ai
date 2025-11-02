@@ -10,6 +10,7 @@ from ..states import HabitCreation
 from ...services.profile_services import get_or_create_user
 from ...services.habit_service import HabitService
 from ...scheduler.job_manager import JobManager
+import html
 
 router = Router(name="habits")
 
@@ -111,7 +112,7 @@ async def log_habit_cmd(message: Message, session):
             f"Current streak: {habit.current_streak} 🔥"
         )
     except ValueError as e:
-        await message.answer(f"❌ {e}")
+        await message.answer(f"❌ {html.escape(str(e))}")
     except Exception as e:
         logger.exception("Failed to log habit: {}", e)
         await message.answer("Failed to log habit. Please try again.")

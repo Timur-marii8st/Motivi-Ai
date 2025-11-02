@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Column, JSON, Relationship
-from sqlalchemy import Text
+from sqlalchemy import Text, DateTime
 from pgvector.sqlalchemy import Vector
 
 
@@ -22,7 +22,10 @@ class Episode(SQLModel, table=True):
     text: str = Field(sa_column=Column(Text, nullable=False))
     metadata_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
+    created_at: datetime = Field(
+        sa_column=Column("created_at", DateTime(timezone=True), nullable=False, index=True),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class EpisodeEmbedding(SQLModel, table=True):
@@ -36,4 +39,4 @@ class EpisodeEmbedding(SQLModel, table=True):
 
     embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)

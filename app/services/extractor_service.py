@@ -31,10 +31,7 @@ class ExtractorService:
         self.client = genai.Client(api_key=settings.GEMMA_API_KEY)
         self.system_prompt = self._load_system_prompt()
         self.gemma_config = genai.types.GenerateContentConfig(
-                system_instruction=self.system_prompt,
                 temperature=0.0,
-                response_mime_type="application/json",
-                response_json_schema=FactExtraction.model_json_schema()
             )
 
     def _load_system_prompt(self) -> str:
@@ -62,12 +59,13 @@ class ExtractorService:
         Returns True if important info is found and writed to memory, else False.
         """
 
-        try:  
+        try:
+            input_text = f"<SystemPrompt>{self.system_prompt}</SystemPrompt>\n\nUser message:\n{text}"
             response = await self.client.aio.models.generate_content(
                 model=settings.GEMMA_MODEL_ID,
                 contents=genai.types.Content(
                     role='user',
-                    parts=[genai.types.Part.from_text(text=text)]
+                    parts=[genai.types.Part.from_text(text=input_text)]
                 ),
                 config=self.gemma_config
             )

@@ -36,7 +36,7 @@ async def update_user_profile(
     if age is not None:
         user.age = age; changed = True
     if timezone is not None:
-        user.timezone = timezone; changed = True
+        user.user_timezone = timezone; changed = True
     if wake_time is not None:
         user.wake_time = wake_time; changed = True
     if bed_time is not None:

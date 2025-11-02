@@ -16,7 +16,7 @@ from ...mcp_client.client import MCPClient
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
-
+from ...utils.get_user_time import get_time_in_zone
 
 
 router = Router(name="chat")
@@ -58,6 +58,8 @@ async def handle_chat(message: Message, session):
     mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
     tool_executor = ToolExecutor(session, mcp_client)
 
+    user_time = get_time_in_zone(user.user_timezone)
+
     # Generate response and get updated history
     reply, updated_history = await conversation_service.respond_with_tools(
         user_text,
@@ -65,7 +67,8 @@ async def handle_chat(message: Message, session):
         user.tg_chat_id,
         tool_executor,
         session,
-        conversation_history=history
+        conversation_history=history,
+        user_time=user_time
     )
 
     await message.answer(reply)

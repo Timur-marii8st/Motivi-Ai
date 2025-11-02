@@ -1,5 +1,5 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime, date, time
+from datetime import datetime, timezone, date, time
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -34,11 +34,11 @@ class Habit(SQLModel, table=True):
     
     # Metadata
     active: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
 
 class HabitLog(SQLModel, table=True):
@@ -54,4 +54,4 @@ class HabitLog(SQLModel, table=True):
     count: int = Field(default=1)
     note: Optional[str] = Field(default=None, max_length=500)
     
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)

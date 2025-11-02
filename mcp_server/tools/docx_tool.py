@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -39,7 +39,7 @@ async def create_docx(
         run.font.color.rgb = RGBColor(128, 128, 128)
     
     # Save
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"plan_{chat_id}_{timestamp}.docx"
     file_path = Path(mcp_settings.TEMP_FILES_DIR) / filename
     

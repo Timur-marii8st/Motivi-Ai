@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime, timezone, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
@@ -35,18 +35,6 @@ class WorkingMemoryService:
         return wm
 
     @staticmethod
-    async def update_focus(
-        session: AsyncSession, user_id: int, summary: str, goals: Optional[dict] = None
-    ) -> WorkingMemory:
-        wm = await WorkingMemoryService.get_or_create(session, user_id)
-        wm.focus_summary = summary
-        if goals is not None:
-            wm.short_term_goals_json = goals
-        wm.updated_at = datetime.utcnow()
-        session.add(wm)
-        return wm
-
-    @staticmethod
     async def refresh_weekly(session: AsyncSession, user_id: int, new_summary: str, new_goals: dict):
         """
         Called by weekly job: reset decay date, update summary/goals.
@@ -55,7 +43,7 @@ class WorkingMemoryService:
         wm.focus_summary = new_summary
         wm.short_term_goals_json = new_goals
         wm.decay_date = date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
-        wm.updated_at = datetime.utcnow()
+        wm.updated_at = datetime.now(timezone.utc)
         session.add(wm)
         logger.info("Working memory refreshed for user {}", user_id)
 
@@ -81,7 +69,7 @@ class WorkingMemoryService:
 
         # update focus_summary with provided text (best-effort)
         wm.focus_summary = fact_text
-        wm.updated_at = datetime.utcnow()
+        wm.updated_at = datetime.now(timezone.utc)
         session.add(wm)
         await session.flush()
 
@@ -95,7 +83,7 @@ class WorkingMemoryService:
             existing = result.scalar_one_or_none()
             if existing:
                 existing.embedding = emb_vector
-                existing.created_at = datetime.utcnow()
+                existing.created_at = datetime.now(timezone.utc)
                 session.add(existing)
                 await session.flush()
                 logger.info("Updated embedding for working_memory {} (user {})", wm.id, user_id)

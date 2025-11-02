@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from aiogram.types import Update
 from loguru import logger
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await bot.delete_webhook()
     except Exception:
         pass
+    # Close underlying aiohttp session used by aiogram to avoid "Unclosed client session" on shutdown
+    try:
+        if getattr(bot, "session", None) is not None:
+            await bot.session.close()
+    except Exception:
+        pass
     logger.info("Motivi_AI shut down")
 
 
@@ -67,46 +73,44 @@ async def oauth_google_callback(code: str, state: str):
     chat_id = user_info["chat_id"]
     
     # 2. Exchange the authorization code for credentials
+    flow = GoogleCalendarService.get_oauth_flow()
+    # The redirect_uri must match the one used in the auth URL
     try:
-        flow = GoogleCalendarService.get_oauth_flow()
-        # The redirect_uri must match the one used in the auth URL
         flow.fetch_token(code=code)
-        creds = flow.credentials
-        
-        # 3. Store the credentials securely
+    except Exception as e:
+        logger.exception("OAuth token exchange failed for user %s: %s", user_id, e)
+        # Send a generic, user-friendly message (avoid raw exception text)
+        await bot.send_message(chat_id, "❌ Authorization failed during token exchange. Please try again.")
+        raise HTTPException(status_code=500, detail="Failed to exchange authorization code for token.")
+
+    creds = flow.credentials
+
+    # 3. Store the credentials securely
+    try:
         async with get_session() as session:
             await GoogleCalendarService.store_credentials(session, user_id, creds)
-            await session.commit()
-        
-        logger.info("Successfully stored Google Calendar credentials for user {}", user_id)
-        
+        logger.info("Successfully stored Google Calendar credentials for user %s", user_id)
+
         # 4. Notify the user in Telegram
         await bot.send_message(
             chat_id,
             "✅ Google Calendar connected successfully! I can now help you manage your events."
         )
-        
-        return JSONResponse(
-            {"status": "success"},
-            status_code=200,
-            # You can redirect to a simple success page here
-            # headers={"Location": "https://your-domain.com/oauth-success"}
-        )
+
+        return JSONResponse({"status": "success"}, status_code=200)
 
     except Exception as e:
-        logger.exception("OAuth callback token exchange failed for user {}: {}", user_id, e)
-        await bot.send_message(
-            chat_id,
-            f"❌ Authorization failed during token exchange: {e}\nPlease try connecting again."
-        )
-        raise HTTPException(status_code=500, detail="Failed to exchange authorization code for token.")
+        # Log detailed error, but present generic message to the user
+        logger.exception("Failed to store Google credentials for user %s: %s", user_id, e)
+        await bot.send_message(chat_id, "❌ Authorization succeeded but saving credentials failed. Please try again.")
+        raise HTTPException(status_code=500, detail="Failed to store credentials.")
 
 
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "scheduler_running": scheduler.running if scheduler else False,
         "jobs_count": len(scheduler.get_jobs()) if scheduler and scheduler.running else 0,
     }
@@ -126,7 +130,7 @@ async def metrics(session: AsyncSession = Depends(get_session)):
     return {
         "total_users": user_count,
         "total_episodes": episode_count,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

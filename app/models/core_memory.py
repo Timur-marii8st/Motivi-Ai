@@ -1,5 +1,5 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
 from sqlalchemy import Text
 from pgvector.sqlalchemy import Vector
@@ -19,7 +19,7 @@ class CoreMemory(SQLModel, table=True):
     core_text: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))    
     sleep_schedule_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
     user: "User" = Relationship(back_populates="core_memory")
 
 class CoreEmbedding(SQLModel, table=True):
@@ -34,4 +34,4 @@ class CoreEmbedding(SQLModel, table=True):
     # Annotate as list[float] (embedding vector) so pydantic can validate the field.
     embedding: list[float] = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)

@@ -34,8 +34,8 @@ async def admin_stats(message: Message, session):
     episode_count = episode_count_result.scalar_one()
     
     # Active users (interacted in last 7 days)
-    from datetime import datetime, timedelta
-    cutoff = datetime.utcnow() - timedelta(days=7)
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     active_result = await session.execute(
         select(func.count(User.id)).where(User.updated_at >= cutoff)
     )

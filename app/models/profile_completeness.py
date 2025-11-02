@@ -1,6 +1,8 @@
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlalchemy import Column
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 
 if TYPE_CHECKING:
@@ -28,8 +30,11 @@ class ProfileCompleteness(SQLModel, table=True):
     total_interactions: int = Field(default=0)
     last_profile_update: Optional[datetime] = None
     
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False)
+    )
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
