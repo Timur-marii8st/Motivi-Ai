@@ -32,8 +32,6 @@ async def profile_cmd(message: Message, session):
         f"• Bedtime: {user.bed_time or 'Not set'}\n\n"
         f"<b>Occupation:</b>\n"
     f"{html.escape(user.occupation_json.get('title', 'Not set')) if user.occupation_json else 'Not set'}\n\n"
-        f"<b>Goals:</b>\n"
-    f"{html.escape(json.dumps(core.goals_json, ensure_ascii=False)) if core.goals_json else 'Not set'}\n\n"
         f"<b>Profile Completeness:</b> {pc.score * 100:.0f}%\n"
         f"<b>Total Interactions:</b> {pc.total_interactions}\n"
     )
@@ -162,32 +160,6 @@ async def edit_goals_callback(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Describe your goals (e.g., 'Get fit, learn Python, read more'):")
     await state.set_state("ProfileEdit:goals")
     await callback.answer()
-
-@router.message(ProfileEdit.goals, F.text)
-async def save_goals(message: Message, state: FSMContext, session):
-    user = await get_or_create_user(session, message.from_user.id, message.chat.id)
-    goals_text = message.text.strip()
-    
-    # Parse with LLM
-    from ...llm.gemini_client import client
-    
-    prompt = f"Extract goals from this text as a JSON array of strings: {goals_text}"
-    try:
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL_ID,
-            contents=prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        goals_json = response.json() if hasattr(response, 'json') else {"goals": [goals_text]}
-    except Exception:
-        goals_json = {"goals": [goals_text]}
-    
-    await CoreMemoryService.update_goals(session, user.id, goals_json)
-    await ProfileCompletenessService.update_score(session, user.id)
-    await session.commit()
-    
-    await message.answer(f"✅ Goals updated:\n<code>{html.escape(json.dumps(goals_json, ensure_ascii=False))}</code>")
-    await state.clear()
 
 @router.callback_query(F.data == "profile_delete_account")
 async def delete_account_callback(callback: CallbackQuery):

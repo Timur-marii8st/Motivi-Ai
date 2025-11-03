@@ -4,11 +4,25 @@ from typing import AsyncGenerator
 from sqlmodel import SQLModel, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import event
 from loguru import logger
 
 from .config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True, pool_pre_ping=True)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
+    connect_args={"command_timeout": 30}
+)
+
+@event.listens_for(engine.sync_engine, "connect")
+def set_timezone(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("SET timezone='UTC'")
+    cursor.close()
+
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def init_db() -> None:

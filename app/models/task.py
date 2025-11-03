@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Text, Column
+from sqlalchemy import Text, Column, DateTime
 
 
 if TYPE_CHECKING:
@@ -24,5 +24,11 @@ class Task(SQLModel, table=True):
     due_dt: Optional[datetime] = Field(default=None, index=True)
     created_from_plan: bool = Field(default=False)
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

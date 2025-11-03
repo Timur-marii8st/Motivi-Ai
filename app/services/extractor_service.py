@@ -102,7 +102,7 @@ class ExtractorService:
                                 await working_memory_service.store_working(
                                     session=session,
                                     user_id=user_id,
-                                    fact_text = item.fact
+                                    fact_text=item.fact
                                 )
                                 logger.info(f"Working memory fact extracted: {item.fact} (Importance: {item.importance})")
                         return True

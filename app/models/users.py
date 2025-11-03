@@ -1,6 +1,7 @@
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime, timezone, time
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
+from sqlalchemy import DateTime
 
 
 if TYPE_CHECKING:
@@ -33,8 +34,14 @@ class User(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
 
     # --- Relationships ---
     # One-to-One relationships

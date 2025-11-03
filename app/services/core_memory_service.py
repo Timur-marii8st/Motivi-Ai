@@ -19,7 +19,7 @@ class CoreMemoryService:
         result = await session.execute(select(CoreMemory).where(CoreMemory.user_id == user_id))
         cm = result.scalar_one_or_none()
         if not cm:
-            cm = CoreMemory(user_id=user_id, goals_json=None, sleep_schedule_json=None)
+            cm = CoreMemory(user_id=user_id, sleep_schedule_json=None)
             session.add(cm)
             await session.flush()
         return cm
@@ -27,7 +27,7 @@ class CoreMemoryService:
     @staticmethod
     async def update_goals(session: AsyncSession, user_id: int, goals: dict) -> CoreMemory:
         cm = await CoreMemoryService.get_or_create(session, user_id)
-        cm.goals_json = goals
+        # store timezone-aware UTC datetime
         cm.updated_at = datetime.now(timezone.utc)
         session.add(cm)
         return cm

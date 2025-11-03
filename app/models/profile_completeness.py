@@ -30,7 +30,10 @@ class ProfileCompleteness(SQLModel, table=True):
     total_interactions: int = Field(default=0)
     last_profile_update: Optional[datetime] = None
     
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+    )
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(TIMESTAMP(timezone=True), nullable=False)

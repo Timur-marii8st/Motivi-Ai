@@ -54,7 +54,6 @@ class ProfileCompletenessService:
         
         if core:
             fields.extend([
-                (core.goals_json, 20),
                 (core.sleep_schedule_json, 5),
             ])
         

@@ -65,16 +65,13 @@ class AccountService:
                 "created_at": user.created_at.isoformat(),
             },
             "core_memory": {
-                "goals": core.goals_json if core else None,
                 "sleep_schedule": core.sleep_schedule_json if core else None,
             },
             "working_memory": {
-                "focus_summary": working.focus_summary if working else None,
-                "short_term_goals": working.short_term_goals_json if working else None,
+                "working_memory_text": working.working_memory_text if working else None,
             },
             "episodes": [
                 {
-                    "type": ep.type,
                     "text": ep.text,
                     "metadata": ep.metadata_json,
                     "created_at": ep.created_at.isoformat(),

@@ -7,7 +7,7 @@ from loguru import logger
 from ..models.users import User
 from ..models.task import Task
 from ..models.core_memory import CoreMemory
-from ..models.working_memory import WorkingMemory
+from ..models.working_memory import WorkingMemory, WorkingMemoryEntry
 from ..models.episode import Episode
 from .core_memory_service import CoreMemoryService
 from .working_memory_service import WorkingMemoryService
@@ -22,14 +22,15 @@ class MemoryPack:
         working: WorkingMemory,
         episodes: List[Episode],
         tasks: Optional[List[Task]] = None,
+        working_history: Optional[List[WorkingMemory]] = None,
     ):
         self.user = user
         self.core = core
         self.working = working
         self.episodes = episodes
-        # tasks are fetched eagerly during assemble to avoid lazy-loading
         # outside of the async DB context which triggers MissingGreenlet
         self.tasks = tasks or []
+        self.working_history = working_history or []
 
     def to_context_dict(self) -> Dict[str, Any]:
         """Serialize for LLM prompt injection."""
@@ -52,13 +53,19 @@ class MemoryPack:
                 ],
             },
             "core_memory": {
-                "goals": self.core.goals_json,
                 "sleep_schedule": self.core.sleep_schedule_json,
-                "core_text": self.core.core_text,
+                "core_facts": self.core.core_text,
             },
             "working_memory": {
-                "focus_summary": self.working.focus_summary,
-                "short_term_goals": self.working.short_term_goals_json,
+                "current": self.working.working_memory_text,
+                "history": [
+                    {
+                        "text": w.working_memory_text,
+                        "order": w.history_order,
+                        "updated_at": w.updated_at.isoformat()
+                    }
+                    for w in sorted(self.working_history, key=lambda x: x.history_order or 999)
+                ],
                 "stale": self.working.decay_date and self.working.decay_date < datetime.now().date(),
             },
             "relevant_episodes": [
@@ -101,12 +108,22 @@ class MemoryOrchestrator:
         working_results = await self.working_service.retrieve_similar(
             session, user.id, query_text=query_text
         )
-        # working_service.retrieve_similar returns a list as well; take the top hit
-        # or fall back to creating/getting the working memory row.
-        if working_results:
-            working = working_results[0]
+        # Get all working memory entries for this user
+        working_history_result = await session.execute(
+            select(WorkingMemoryEntry)
+            .where(WorkingMemoryEntry.user_id == user.id)
+            .order_by(WorkingMemoryEntry.history_order.asc())
+            .limit(7)
+        )
+        working_history = working_history_result.scalars().all()
+
+        # Use the most recent working memory or create new if none exists
+        if working_history:
+            working = working_history[0]  # newest entry (history_order=1)
         else:
             working = await self.working_service.get_or_create(session, user.id)
+            working_history = [working]
+            
         # RAG retrieval
         episodes = await self.episodic_service.retrieve_similar(
             session, user.id, query_text=query_text
@@ -122,4 +139,11 @@ class MemoryOrchestrator:
         tasks_result = await session.execute(select(Task).where(Task.user_id == user.id))
         tasks = tasks_result.scalars().all()
 
-        return MemoryPack(user=user, core=core, working=working, episodes=episodes, tasks=tasks)
+        return MemoryPack(
+            user=user,
+            core=core,
+            working=working,
+            episodes=episodes,
+            tasks=tasks,
+            working_history=working_history
+        )

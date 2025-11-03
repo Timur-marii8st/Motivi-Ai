@@ -1,6 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, date, time
 from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import Column, DateTime
 
 
 if TYPE_CHECKING:
@@ -34,8 +35,14 @@ class Habit(SQLModel, table=True):
     
     # Metadata
     active: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
 
     def touch(self) -> None:
         self.updated_at = datetime.now(timezone.utc)
@@ -54,4 +61,7 @@ class HabitLog(SQLModel, table=True):
     count: int = Field(default=1)
     note: Optional[str] = Field(default=None, max_length=500)
     
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

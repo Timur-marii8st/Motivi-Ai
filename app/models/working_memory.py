@@ -1,6 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, date
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
+from sqlalchemy import DateTime
 from pgvector.sqlalchemy import Vector
 
 
@@ -18,12 +19,52 @@ class WorkingMemory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
 
-    focus_summary: Optional[str] = Field(default=None, max_length=2000)
-    short_term_goals_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    working_memory_text: Optional[str] = Field(default=None, max_length=2000)
+    history_order: Optional[int] = Field(default=None, index=True)
 
     decay_date: Optional[date] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
     user: "User" = Relationship(back_populates="working_memory")
+
+
+class WorkingMemoryEntry(SQLModel, table=True):
+    """
+    Historical working memory entries. One row per entry per user.
+    Newest entry should have history_order=1.
+    """
+    __tablename__ = "working_memory_entry"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="users.id")
+
+    working_memory_text: Optional[str] = Field(default=None, max_length=2000)
+    history_order: Optional[int] = Field(default=None, index=True)
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class WorkingEntryEmbedding(SQLModel, table=True):
+    __tablename__ = "working_memory_entry_embeddings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    working_entry_id: int = Field(unique=True, foreign_key="working_memory_entry.id", index=True)
+
+    embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
 
 class WorkingEmbedding(SQLModel, table=True):
     """
@@ -36,4 +77,7 @@ class WorkingEmbedding(SQLModel, table=True):
 
     embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

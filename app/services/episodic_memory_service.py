@@ -22,7 +22,6 @@ class EpisodicMemoryService:
         self,
         session: AsyncSession,
         user_id: int,
-        type: str,
         fact_text: str,
         metadata: Optional[dict] = None,
     ) -> Episode:
@@ -30,7 +29,7 @@ class EpisodicMemoryService:
         Store an episode and generate its embedding.
         """
         # set created_at on Episode model; expiry handled at retrieval time using settings
-        ep = Episode(user_id=user_id, type=type, text=fact_text, metadata_json=metadata or {})
+        ep = Episode(user_id=user_id, text=fact_text, metadata_json=metadata or {})
         session.add(ep)
         await session.flush()  # Get ep.id
 

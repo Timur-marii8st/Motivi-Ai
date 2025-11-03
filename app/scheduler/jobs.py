@@ -174,7 +174,6 @@ async def cleanup_expired_memories_job():
 
             if stale_wm_ids:
                 await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
-                # Optionally, clear focus_summary and short_term_goals_json and reset decay_date
                 await session.execute(
                     delete(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
                 )

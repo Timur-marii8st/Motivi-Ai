@@ -5,8 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
 
-from ..models.working_memory import WorkingMemory
-from ..models.working_memory import WorkingEmbedding
+from ..models.working_memory import (
+    WorkingMemory,
+    WorkingEmbedding,
+    WorkingMemoryEntry,
+    WorkingEntryEmbedding,
+)
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 from typing import List
 from ..config import settings
@@ -26,8 +30,8 @@ class WorkingMemoryService:
             # use configured lifetime days for decay_date
             wm = WorkingMemory(
                 user_id=user_id,
-                focus_summary=None,
-                short_term_goals_json=None,
+                working_memory_text=None,
+                history_order=1,
                 decay_date=date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS)),
             )
             session.add(wm)
@@ -37,14 +41,14 @@ class WorkingMemoryService:
     @staticmethod
     async def refresh_weekly(session: AsyncSession, user_id: int, new_summary: str, new_goals: dict):
         """
-        Called by weekly job: reset decay date, update summary/goals.
+        Called by weekly job: add new summary while maintaining history.
         """
-        wm = await WorkingMemoryService.get_or_create(session, user_id)
-        wm.focus_summary = new_summary
-        wm.short_term_goals_json = new_goals
-        wm.decay_date = date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
-        wm.updated_at = datetime.now(timezone.utc)
-        session.add(wm)
+        working_service = WorkingMemoryService()
+        await working_service.store_working(
+            session=session,
+            user_id=user_id,
+            fact_text=new_summary
+        )
         logger.info("Working memory refreshed for user {}", user_id)
 
     @staticmethod
@@ -63,37 +67,60 @@ class WorkingMemoryService:
         metadata: Optional[dict] = None,
     ) -> WorkingMemory:
         """
-        Store or update working memory summary and create/update its embedding.
+        Store working memory text while maintaining history of last 7 entries.
         """
-        wm = await WorkingMemoryService.get_or_create(session, user_id)
+        # Get existing entry rows for this user ordered by history_order (1 = newest)
+        res = await session.execute(
+            select(WorkingMemoryEntry)
+            .where(WorkingMemoryEntry.user_id == user_id)
+            .order_by(WorkingMemoryEntry.history_order.asc())
+        )
+        existing_entries = res.scalars().all()
 
-        # update focus_summary with provided text (best-effort)
-        wm.focus_summary = fact_text
-        wm.updated_at = datetime.now(timezone.utc)
-        session.add(wm)
+        # Increment history_order for existing entries (1->2, 2->3, ...)
+        for entry in existing_entries[:6]:
+            entry.history_order = (entry.history_order or 0) + 1
+            session.add(entry)
+
+        # Delete entries beyond the 7th (those with index >=6)
+        for old in existing_entries[6:]:
+            await session.delete(old)
+
+        # Create new entry as newest (history_order=1)
+        new_entry = WorkingMemoryEntry(
+            user_id=user_id,
+            working_memory_text=fact_text,
+            history_order=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        session.add(new_entry)
         await session.flush()
 
-        # generate embedding and store one-per-working-memory
+        # generate embedding for the new entry
         try:
             emb_vector = await self.embeddings.embed(fact_text, task_type="retrieval_document")
             if not emb_vector:
                 raise ValueError("Empty embedding returned")
 
-            result = await session.execute(select(WorkingEmbedding).where(WorkingEmbedding.working_memory_id == wm.id))
-            existing = result.scalar_one_or_none()
-            if existing:
-                existing.embedding = emb_vector
-                existing.created_at = datetime.now(timezone.utc)
-                session.add(existing)
-                await session.flush()
-                logger.info("Updated embedding for working_memory {} (user {})", wm.id, user_id)
-            else:
-                emb = WorkingEmbedding(working_memory_id=wm.id, embedding=emb_vector)
-                session.add(emb)
-                await session.flush()
-                logger.info("Stored embedding for working_memory {} (user {})", wm.id, user_id)
+            emb = WorkingEntryEmbedding(
+                working_entry_id=new_entry.id,
+                embedding=emb_vector,
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(emb)
+            await session.flush()
+            logger.info("Stored embedding for working_memory_entry {} (user {})", new_entry.id, user_id)
         except Exception as e:
-            logger.error("Failed to embed working memory for user {}: {}", user_id, e)
+            logger.error("Failed to embed working memory entry for user {}: {}", user_id, e)
+
+        # Update the summary row (single WorkingMemory) so existing callers still get a quick summary
+        wm = await WorkingMemoryService.get_or_create(session, user_id)
+        wm.working_memory_text = fact_text
+        wm.decay_date = date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
+        wm.updated_at = datetime.now(timezone.utc)
+        session.add(wm)
+        await session.flush()
 
         return wm
 

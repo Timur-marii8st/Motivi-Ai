@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
-from sqlalchemy import Text
+from sqlalchemy import Text, DateTime
 from pgvector.sqlalchemy import Vector
 
 if TYPE_CHECKING:
@@ -13,13 +13,16 @@ class CoreMemory(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
-    goals_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     # Use a plain Python type for annotations so pydantic can generate a schema.
     # Keep the SQLAlchemy Text column via `sa_column` so the DB column is Text.
     core_text: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))    
     sleep_schedule_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    # Use timezone-aware UTC datetimes and a timezone-aware DB column.
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
     user: "User" = Relationship(back_populates="core_memory")
 
 class CoreEmbedding(SQLModel, table=True):
@@ -34,4 +37,8 @@ class CoreEmbedding(SQLModel, table=True):
     # Annotate as list[float] (embedding vector) so pydantic can validate the field.
     embedding: list[float] = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    # Use timezone-aware UTC datetimes and a timezone-aware DB column for embeddings.
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

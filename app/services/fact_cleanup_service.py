@@ -70,7 +70,7 @@ class FactCleanupService:
         for row in rows:
             # row: (id, created_at, embedding)
             ep_id, created_at, embedding = row
-            if not embedding:
+            if embedding is None:
                 continue
             episodes.append((ep_id, created_at, embedding))
 

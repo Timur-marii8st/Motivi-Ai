@@ -15,7 +15,7 @@ async def get_or_create_user(session: AsyncSession, tg_user_id: int, tg_chat_id:
     session.add(user)
     await session.flush()
     # Ensure core memory row
-    cm = CoreMemory(user_id=user.id, goals_json=None, sleep_schedule_json=None)
+    cm = CoreMemory(user_id=user.id, sleep_schedule_json=None)
     session.add(cm)
     await session.flush()
     return user

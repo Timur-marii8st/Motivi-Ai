@@ -86,5 +86,10 @@ async def handle_chat(message: Message, session):
     try:
         await fact_cleanup_service.clear_duplicate_facts(session, user.id)
         logger.info("Cleared duplicate facts for user {}", user.id)
+    except ValueError as e:
+        if "The truth value of an array with more than one element is ambiguous" in str(e):
+            logger.error("Numpy array truth value error in clear_duplicate_facts for user %s: %s", user.id, e)
+        else:
+            logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)
     except Exception as e:
         logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)

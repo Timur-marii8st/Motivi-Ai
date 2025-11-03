@@ -39,4 +39,7 @@ class EpisodeEmbedding(SQLModel, table=True):
 
     embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Field(
+        sa_column=Column("created_at", DateTime(timezone=True), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
