@@ -60,7 +60,7 @@ class ExtractorService:
         """
 
         try:
-            input_text = f"<SystemPrompt>{self.system_prompt}</SystemPrompt>\n\nUser message:\n{text}"
+            input_text = f"<SystemPrompt>{self.system_prompt}</SystemPrompt>\n\n{text}"
             response = await self.client.aio.models.generate_content(
                 model=settings.GEMMA_MODEL_ID,
                 contents=genai.types.Content(
@@ -108,6 +108,11 @@ class ExtractorService:
                         return True
                     except Exception as e:
                         logger.error(f"Failed to store extracted facts: {e}")
+                        # Rollback the session to avoid PendingRollbackError
+                        try:
+                            await session.rollback()
+                        except Exception as rollback_error:
+                            logger.error(f"Failed to rollback session: {rollback_error}")
                         return False
         except Exception as e:
             logger.error(f"Gemma extraction failed: {e}")

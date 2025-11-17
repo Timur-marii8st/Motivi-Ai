@@ -1,5 +1,4 @@
 from __future__ import annotations
-from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -145,7 +144,7 @@ class GoogleCalendarService:
         start_dt: datetime,
         end_dt: datetime,
         description: Optional[str] = None,
-        timezone: str = "UTC",
+        tz: str = "UTC",
     ) -> Optional[str]:
         """Create a calendar event. Returns event ID or None on failure."""
         creds = await GoogleCalendarService.get_credentials(session, user_id)
@@ -159,8 +158,8 @@ class GoogleCalendarService:
             event = {
                 "summary": summary,
                 "description": description or "",
-                "start": {"dateTime": start_dt.isoformat(), "timeZone": timezone},
-                "end": {"dateTime": end_dt.isoformat(), "timeZone": timezone},
+                "start": {"dateTime": start_dt.isoformat(), "timeZone": tz},
+                "end": {"dateTime": end_dt.isoformat(), "timeZone": tz},
             }
 
             created_event = await asyncio.to_thread(
@@ -180,7 +179,7 @@ class GoogleCalendarService:
         user_id: int,
         start_dt: datetime,
         end_dt: datetime,
-        timezone: str = "UTC",
+        tz: str = "UTC",
     ) -> bool:
         """Check if user is free during a time window. Returns True if available."""
         creds = await GoogleCalendarService.get_credentials(session, user_id)
@@ -199,7 +198,7 @@ class GoogleCalendarService:
             body = {
                 "timeMin": _to_rfc3339(start_dt),
                 "timeMax": _to_rfc3339(end_dt),
-                "timeZone": timezone,
+                "timeZone": tz,
                 "items": [{"id": "primary"}],
             }
 
@@ -216,7 +215,7 @@ class GoogleCalendarService:
 
     @staticmethod
     async def list_upcoming_events(
-        session: AsyncSession, user_id: int, max_results: int = 10, timezone: str = "UTC"
+        session: AsyncSession, user_id: int, max_results: int = 10, tz: str = "UTC"
     ) -> List[Dict[str, Any]]:
         """List upcoming events."""
         creds = await GoogleCalendarService.get_credentials(session, user_id)

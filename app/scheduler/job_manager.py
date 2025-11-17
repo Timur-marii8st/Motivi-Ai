@@ -26,11 +26,9 @@ class JobManager:
         tz = ZoneInfo(user.user_timezone)
         
         # Morning check-in
+        job_id = f"morning_{user.id}"
         if settings.enable_morning_checkin and user.wake_time:
             wake = user.wake_time
-            job_id = f"morning_{user.id}"
-            
-            # Add new
             scheduler.add_job(
                 func="app.scheduler.jobs:morning_checkin_job",
                 trigger=CronTrigger(hour=wake.hour, minute=wake.minute, timezone=tz),
@@ -39,13 +37,21 @@ class JobManager:
                 replace_existing=True,
             )
             logger.info("Scheduled morning check-in for user {} at {}", user.id, wake)
+        else:
+            # Remove job if disabled or wake_time not set
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+                logger.info("Removed morning check-in job for user {} (disabled or wake_time not set)", user.id)
 
         # Evening wrap-up (1 hour before bed)
+        job_id = f"evening_{user.id}"
         if settings.enable_evening_wrapup and user.bed_time:
             bed = user.bed_time
-            evening_hour = (bed.hour - 1) % 24
-            job_id = f"evening_{user.id}"
-            
+            # Calculate 1 hour before bed time, handling midnight rollover
+            if bed.hour == 0:
+                evening_hour = 23
+            else:
+                evening_hour = bed.hour - 1
             scheduler.add_job(
                 func="app.scheduler.jobs:evening_wrapup_job",
                 trigger=CronTrigger(hour=evening_hour, minute=bed.minute, timezone=tz),
@@ -53,12 +59,17 @@ class JobManager:
                 args=[user.id],
                 replace_existing=True,
             )
-            logger.info("Scheduled evening wrap-up for user {} at {}:{:02d}", user.id, evening_hour, bed.minute)
+            logger.info("Scheduled evening wrap-up for user {} at {}:{:02d} (1 hour before bed at {}:{:02d})", 
+                       user.id, evening_hour, bed.minute, bed.hour, bed.minute)
+        else:
+            # Remove job if disabled or bed_time not set
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+                logger.info("Removed evening wrap-up job for user {} (disabled or bed_time not set)", user.id)
 
         # Weekly plan (Sundays at 18:00 local time)
+        job_id = f"weekly_{user.id}"
         if settings.enable_weekly_plan:
-            job_id = f"weekly_{user.id}"
-            
             scheduler.add_job(
                 func="app.scheduler.jobs:weekly_plan_job",
                 trigger=CronTrigger(day_of_week='sun', hour=18, minute=0, timezone=tz),
@@ -67,13 +78,15 @@ class JobManager:
                 replace_existing=True,
             )
             logger.info("Scheduled weekly plan for user {}", user.id)
-
-        # Monthly plan (1st of month at 18:00 local time)
-        if settings.enable_monthly_plan:
-            job_id = f"monthly_{user.id}"
+        else:
+            # Remove job if disabled
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
-            
+                logger.info("Removed weekly plan job for user {} (disabled)", user.id)
+
+        # Monthly plan (1st of month at 18:00 local time)
+        job_id = f"monthly_{user.id}"
+        if settings.enable_monthly_plan:
             scheduler.add_job(
                 func="app.scheduler.jobs:monthly_plan_job",
                 trigger=CronTrigger(day=1, hour=18, minute=0, timezone=tz),
@@ -82,6 +95,11 @@ class JobManager:
                 replace_existing=True,
             )
             logger.info("Scheduled monthly plan for user {}", user.id)
+        else:
+            # Remove job if disabled
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+                logger.info("Removed monthly plan job for user {} (disabled)", user.id)
 
     @staticmethod
     async def remove_user_jobs(user_id: int):
@@ -89,7 +107,7 @@ class JobManager:
         for prefix in ["morning", "evening", "weekly", "monthly"]:
             job_id = f"{prefix}_{user_id}"
             if scheduler.get_job(job_id):
-                await scheduler.remove_job(job_id)
+                scheduler.remove_job(job_id)
                 logger.info("Removed job {}", job_id)
 
     @staticmethod

@@ -20,9 +20,7 @@ class ToolExecutor:
         Route tool call to appropriate handler.
         """
         try:
-            if tool_name == "create_and_send_plan_document":
-                return await self._create_and_send_plan(args, chat_id, user_id)
-            elif tool_name == "create_task":
+            if tool_name == "create_task":
                 return await self._create_task(args, user_id)
             elif tool_name == "send_telegram_message_and_pin":
                 return await self._send_telegram_message_and_pin(args, chat_id)
@@ -72,25 +70,6 @@ class ToolExecutor:
         )
         
         return {"success": True, "available": available}
-    
-    async def _create_and_send_plan(self, args: Dict, chat_id: int, user_id: int) -> Dict:
-        """Create docx, send"""
-        file_path = await self.mcp.create_docx(
-            chat_id=chat_id,
-            title=args["title"],
-            sections=args["sections"],
-            footer=args.get("footer"),
-        )
-        
-        message_id = await self.mcp.send_file(
-            chat_id=chat_id,
-            file_path=file_path,
-            caption=f"📋 {args['title']}",
-        )
-        
-        logger.info("Sent and document (message_id: {}) for user {}", message_id, user_id)
-        
-        return {"success": True, "message_id": message_id, "file_path": file_path}
 
     async def _create_task(self, args: Dict, user_id: int) -> Dict:
         """Create a task in database."""
@@ -120,6 +99,6 @@ class ToolExecutor:
         await self.mcp.send_telegram_message_and_pin(
             chat_id=chat_id,
             message_text=args["message_text"],
-            disable_notification=True
+            disable_notification=args.get("disable_notification", True)
         )
         return {"success": True}

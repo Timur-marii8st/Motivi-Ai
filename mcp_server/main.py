@@ -5,7 +5,7 @@ from loguru import logger
 from contextlib import asynccontextmanager
 
 from .config import mcp_settings
-from .tools import docx_tool, txt_tool, telegram_tool
+from .tools import telegram_tool
 
 # Ensure temp dir exists
 Path(mcp_settings.TEMP_FILES_DIR).mkdir(parents=True, exist_ok=True)
@@ -32,35 +32,9 @@ async def health():
 
 # Tool endpoints
 from .schemas import (
-    CreateDocxRequest, CreateTxtRequest, SendFileRequest,
+    SendFileRequest,
     SendPinMessageRequest
 )
-
-@app.post("/tools/create_docx", dependencies=[Depends(verify_token)])
-async def create_docx_endpoint(req: CreateDocxRequest):
-    try:
-        file_path = await docx_tool.create_docx(
-            chat_id=req.chat_id,
-            title=req.title,
-            sections=req.sections,
-            footer=req.footer,
-        )
-        return {"success": True, "file_path": str(file_path)}
-    except Exception as e:
-        logger.exception("create_docx failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/tools/create_txt", dependencies=[Depends(verify_token)])
-async def create_txt_endpoint(req: CreateTxtRequest):
-    try:
-        file_path = await txt_tool.create_txt(
-            filename=req.filename,
-            text=req.text,
-        )
-        return {"success": True, "file_path": str(file_path)}
-    except Exception as e:
-        logger.exception("create_txt failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/tools/send_file", dependencies=[Depends(verify_token)])
 async def send_file_endpoint(req: SendFileRequest):
@@ -80,7 +54,7 @@ async def send_telegram_message_and_pin_endpoint(req: SendPinMessageRequest):
     try:
         await telegram_tool.send_telegram_message_and_pin(
             chat_id=req.chat_id,
-            message_id=req.message_text,
+            message_text=req.message_text,
             disable_notification=req.disable_notification,
         )
         return {"success": True}

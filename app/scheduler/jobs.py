@@ -17,7 +17,8 @@ from sqlmodel import delete
 async def morning_checkin_job(user_id: int):
     """Morning check-in job."""
     logger.info("Running morning check-in for user {}", user_id)
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         # Check break mode
         if await _is_break_mode_active(session, user_id):
             logger.info("User {} is in break mode; skipping morning check-in", user_id)
@@ -30,11 +31,18 @@ async def morning_checkin_job(user_id: int):
         
         flows = ProactiveFlows(session)
         await flows.morning_checkin(user)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in morning_checkin_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 async def evening_wrapup_job(user_id: int):
     """Evening wrap-up job."""
     logger.info("Running evening wrap-up for user {}", user_id)
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         if await _is_break_mode_active(session, user_id):
             logger.info("User {} is in break mode; skipping evening wrap-up", user_id)
             return
@@ -45,11 +53,18 @@ async def evening_wrapup_job(user_id: int):
         
         flows = ProactiveFlows(session)
         await flows.evening_wrapup(user)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in evening_wrapup_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 async def weekly_plan_job(user_id: int):
     """Weekly plan generation."""
     logger.info("Running weekly plan for user {}", user_id)
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         if await _is_break_mode_active(session, user_id):
             logger.info("User {} is in break mode; skipping weekly plan", user_id)
             return
@@ -60,11 +75,18 @@ async def weekly_plan_job(user_id: int):
         
         flows = ProactiveFlows(session)
         await flows.weekly_plan(user)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in weekly_plan_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 async def monthly_plan_job(user_id: int):
     """Monthly plan generation."""
     logger.info("Running monthly plan for user {}", user_id)
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         if await _is_break_mode_active(session, user_id):
             logger.info("User {} is in break mode; skipping monthly plan", user_id)
             return
@@ -75,6 +97,12 @@ async def monthly_plan_job(user_id: int):
         
         flows = ProactiveFlows(session)
         await flows.monthly_plan(user)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in monthly_plan_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
     """Check if user is in break mode."""
@@ -100,7 +128,8 @@ async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
 async def habit_reminder_job(habit_id: int):
     """Send habit reminder."""
     logger.info("Running habit reminder for habit {}", habit_id)
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         from ..models.habit import Habit
         from aiogram import Bot
         from ..config import settings
@@ -140,46 +169,54 @@ async def habit_reminder_job(habit_id: int):
         
         await bot.send_message(user.tg_chat_id, message)
         logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
+    except Exception as e:
+        logger.exception("Error in habit_reminder_job for habit {}: {}", habit_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
         
 async def cleanup_expired_memories_job():
     """Cleanup episodes older than EPISODE_LIFETIME_DAYS and working embeddings for stale working memory."""
     logger.info("Running cleanup_expired_memories_job")
-    async with AsyncSessionLocal() as session:
-        try:
-            # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
-            life_days = float(settings.EPISODE_LIFETIME_DAYS)
-            cutoff = datetime.now(timezone.utc) - timedelta(days=life_days)
+    session = AsyncSessionLocal()
+    try:
+        # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
+        life_days = float(settings.EPISODE_LIFETIME_DAYS)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=life_days)
 
-            # find expired episode ids
-            result = await session.execute(
-                select(Episode.id).where(Episode.created_at < cutoff)
+        # find expired episode ids
+        result = await session.execute(
+            select(Episode.id).where(Episode.created_at < cutoff)
+        )
+        expired_ids = [r for (r,) in result.all()]
+
+        if expired_ids:
+            # delete embeddings
+            await session.execute(delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids)))
+            # delete episodes
+            await session.execute(delete(Episode).where(Episode.id.in_(expired_ids)))
+            await session.commit()
+            logger.info("Deleted {} expired episodes and their embeddings", len(expired_ids))
+        else:
+            logger.info("No expired episodes to delete")
+
+        # Working memory: remove WorkingEmbedding rows for working memories with decay_date passed
+        result = await session.execute(
+            select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.now(timezone.utc).date())
+        )
+        stale_wm_ids = [r for (r,) in result.all()]
+
+        if stale_wm_ids:
+            await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
+            await session.execute(
+                delete(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
             )
-            expired_ids = [r for (r,) in result.all()]
-
-            if expired_ids:
-                # delete embeddings
-                await session.execute(delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids)))
-                # delete episodes
-                await session.execute(delete(Episode).where(Episode.id.in_(expired_ids)))
-                await session.commit()
-                logger.info("Deleted {} expired episodes and their embeddings", len(expired_ids))
-            else:
-                logger.info("No expired episodes to delete")
-
-            # Working memory: remove WorkingEmbedding rows for working memories with decay_date passed
-            result = await session.execute(
-                select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.now(timezone.utc).date())
-            )
-            stale_wm_ids = [r for (r,) in result.all()]
-
-            if stale_wm_ids:
-                await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
-                await session.execute(
-                    delete(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
-                )
-                await session.commit()
-                logger.info("Deleted embeddings and working memory for {} stale working memories", len(stale_wm_ids))
-            else:
-                logger.info("No stale working memories found")
-        except Exception as e:
-            logger.exception("Error during cleanup_expired_memories_job: {}", e)
+            await session.commit()
+            logger.info("Deleted embeddings and working memory for {} stale working memories", len(stale_wm_ids))
+        else:
+            logger.info("No stale working memories found")
+    except Exception as e:
+        logger.exception("Error during cleanup_expired_memories_job: {}", e)
+        await session.rollback()
+    finally:
+        await session.close()

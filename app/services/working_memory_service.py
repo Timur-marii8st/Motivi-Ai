@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from datetime import datetime, timezone, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete
 from sqlmodel import select
 from loguru import logger
 
@@ -83,7 +84,15 @@ class WorkingMemoryService:
             session.add(entry)
 
         # Delete entries beyond the 7th (those with index >=6)
+        # First delete associated embeddings to avoid foreign key constraint violation
         for old in existing_entries[6:]:
+            # Delete associated embeddings first
+            await session.execute(
+                delete(WorkingEntryEmbedding).where(
+                    WorkingEntryEmbedding.working_entry_id == old.id
+                )
+            )
+            # Then delete the entry
             await session.delete(old)
 
         # Create new entry as newest (history_order=1)

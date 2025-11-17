@@ -55,14 +55,17 @@ class MemoryPack:
             "core_memory": {
                 "sleep_schedule": self.core.sleep_schedule_json,
                 "core_facts": self.core.core_text,
+                "last_updated": self.core.updated_at.isoformat() if self.core.updated_at else None,
             },
             "working_memory": {
                 "current": self.working.working_memory_text,
+                "current_updated_at": self.working.updated_at.isoformat() if self.working.updated_at else None,
                 "history": [
                     {
                         "text": w.working_memory_text,
                         "order": w.history_order,
-                        "updated_at": w.updated_at.isoformat()
+                        "created_at": w.created_at.isoformat() if w.created_at else None,
+                        "updated_at": w.updated_at.isoformat() if w.updated_at else None,
                     }
                     for w in sorted(self.working_history, key=lambda x: x.history_order or 999)
                 ],
@@ -71,7 +74,7 @@ class MemoryPack:
             "relevant_episodes": [
                 {
                     "text": ep.text,
-                    "date": ep.created_at.isoformat(),
+                    "created_at": ep.created_at.isoformat(),
                 }
                 for ep in self.episodes
             ],
@@ -117,12 +120,11 @@ class MemoryOrchestrator:
         )
         working_history = working_history_result.scalars().all()
 
-        # Use the most recent working memory or create new if none exists
-        if working_history:
-            working = working_history[0]  # newest entry (history_order=1)
+        # Choose current working memory summary (from semantic results or ensure it exists)
+        if working_results:
+            working = working_results[0]
         else:
             working = await self.working_service.get_or_create(session, user.id)
-            working_history = [working]
             
         # RAG retrieval
         episodes = await self.episodic_service.retrieve_similar(

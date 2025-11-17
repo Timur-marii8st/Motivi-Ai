@@ -2,31 +2,6 @@
 Tool/function definitions for Gemini function calling.
 """
 
-TOOL_CREATE_DOCX = {
-    "name": "create_and_send_plan_document",
-    "description": "Create a formatted .docx plan document with sections and send it to the user, then pin it.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string", "description": "Document title (e.g., 'Weekly Plan - Jan 15-21')"},
-            "sections": {
-                "type": "array",
-                "description": "List of sections with heading and content",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "heading": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                    "required": ["heading", "content"],
-                },
-            },
-            "footer": {"type": "string", "description": "Optional footer text"},
-        },
-        "required": ["title", "sections"],
-    },
-}
-
 TOOL_CREATE_TASK = {
     "name": "create_task",
     "description": "Create a new task for the user with title, description, and optional due date.",
@@ -47,9 +22,10 @@ SEND_TELEGRAM_MESSAGE_AND_PIN = {
     "parameters": {
         "type": "object",
         "properties": {
-                "message_text": {"type": "string", "description": "Text of the message to send"},
+            "message_text": {"type": "string", "description": "Text of the message to send"},
+            "disable_notification": {"type": "boolean", "description": "Send silently without sound", "default": False},
         },
-            "required": ["message_text"],
+        "required": ["message_text"],
     },
 }
 
@@ -82,7 +58,6 @@ TOOL_CHECK_AVAILABILITY = {
 }
 
 ALL_TOOLS = [
-    TOOL_CREATE_DOCX,
     TOOL_CREATE_TASK,
     SEND_TELEGRAM_MESSAGE_AND_PIN,
     TOOL_CREATE_CALENDAR_EVENT,

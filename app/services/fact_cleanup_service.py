@@ -72,6 +72,19 @@ class FactCleanupService:
             ep_id, created_at, embedding = row
             if embedding is None:
                 continue
+            # Convert to list if it's a NumPy array or other array-like type
+            try:
+                if hasattr(embedding, 'tolist'):
+                    embedding = embedding.tolist()
+                elif isinstance(embedding, tuple):
+                    embedding = list(embedding)
+                # Ensure it's a list
+                if not isinstance(embedding, list):
+                    logger.warning("Unexpected embedding type for episode {}: {}", ep_id, type(embedding))
+                    continue
+            except Exception as e:
+                logger.warning("Failed to process embedding for episode {}: {}", ep_id, e)
+                continue
             episodes.append((ep_id, created_at, embedding))
 
         if len(episodes) <= 1:
@@ -86,8 +99,19 @@ class FactCleanupService:
             .where(CoreMemory.user_id == user_id)
         )
         core_row = result.scalar_one_or_none()
-        if core_row:
-            core_emb = core_row
+        # Check if core_row is not None and not empty (avoid NumPy array truth value error)
+        if core_row is not None:
+            try:
+                # Convert to list if it's a NumPy array or other array-like type
+                if hasattr(core_row, 'tolist'):
+                    core_emb = core_row.tolist()
+                elif isinstance(core_row, (list, tuple)):
+                    core_emb = list(core_row) if not isinstance(core_row, list) else core_row
+                else:
+                    core_emb = core_row
+            except Exception:
+                logger.warning("Failed to process core embedding for user {}", user_id)
+                core_emb = None
 
         working_emb = None
         result = await session.execute(
@@ -96,8 +120,19 @@ class FactCleanupService:
             .where(WorkingMemory.user_id == user_id)
         )
         working_row = result.scalar_one_or_none()
-        if working_row:
-            working_emb = working_row
+        # Check if working_row is not None and not empty (avoid NumPy array truth value error)
+        if working_row is not None:
+            try:
+                # Convert to list if it's a NumPy array or other array-like type
+                if hasattr(working_row, 'tolist'):
+                    working_emb = working_row.tolist()
+                elif isinstance(working_row, (list, tuple)):
+                    working_emb = list(working_row) if not isinstance(working_row, list) else working_row
+                else:
+                    working_emb = working_row
+            except Exception:
+                logger.warning("Failed to process working embedding for user {}", user_id)
+                working_emb = None
 
         # 3) Greedy deduplication using pgvector SQL (KNN/distance predicate)
         # sort episodes by created_at desc (keep newest)

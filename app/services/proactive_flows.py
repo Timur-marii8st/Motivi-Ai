@@ -38,92 +38,106 @@ class ProactiveFlows:
         """
         Morning check-in: greet, suggest top tasks, motivate.
         """
-        greeting = f"Good morning, {user.name}! ☀️"
-        
-        prompt = (
-            "It's morning. Help me plan my day. "
-            "Check my recent episodes, suggest 3 top-priority tasks, and motivate me."
-        )
-        
-        memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
-        
-        response, _ = await self.conversation_service.respond_with_tools(
-            prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
-        )
-        
-        message = f"{greeting}\n\n{response}"
-        await self.bot.send_message(user.tg_chat_id, message)
-        
-        logger.info("Morning check-in sent to user {}", user.id)
+        try:
+            greeting = f"Good morning, {user.name}! ☀️"
+            
+            prompt = (
+                "It's morning. Help me plan my day. "
+                "Check my recent episodes, suggest 3 top-priority tasks, and motivate me."
+            )
+            
+            memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
+            
+            response, _ = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            )
+            
+            message = f"{greeting}\n\n{response}"
+            await self.bot.send_message(user.tg_chat_id, message)
+            
+            logger.info("Morning check-in sent to user {}", user.id)
+        except Exception as e:
+            logger.exception("Error sending morning check-in to user {}: {}", user.id, e)
+            raise
 
     async def evening_wrapup(self, user: User):
         """
         Evening wrap-up: reflect, log wins, encourage.
         """
-        greeting = f"Good evening, {user.name}! 🌙"
-        
-        prompt = (
-            "It's evening. Let's wrap up the day. "
-            "Ask me what went well, what I completed, and encourage me for tomorrow."
-        )
-        
-        memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
-        
-        response, _ = await self.conversation_service.respond_with_tools(
-            prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
-        )
-        
-        message = f"{greeting}\n\n{response}"
-        await self.bot.send_message(user.tg_chat_id, message)
-        
-        logger.info("Evening wrap-up sent to user {}", user.id)
+        try:
+            greeting = f"Good evening, {user.name}! 🌙"
+            
+            prompt = (
+                "It's evening. Let's wrap up the day. "
+                "Ask me what went well, what I completed, and encourage me for tomorrow."
+            )
+            
+            memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
+            
+            response, _ = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            )
+            
+            message = f"{greeting}\n\n{response}"
+            await self.bot.send_message(user.tg_chat_id, message)
+            
+            logger.info("Evening wrap-up sent to user {}", user.id)
+        except Exception as e:
+            logger.exception("Error sending evening wrap-up to user {}: {}", user.id, e)
+            raise
 
     async def weekly_plan(self, user: User):
         """
-        Generate weekly plan, create docx, send, and pin.
+        Generate weekly plan, send and pin.
         """
-        now = datetime.now()
-        week_start = now.strftime("%b %d")
-        week_end = (now + timedelta(days=7)).strftime("%b %d")
-        
-        prompt = (
-            f"Generate a detailed weekly plan for {week_start} to {week_end}. "
-            "Use my goals, recent episodes, and habits. "
-            "Create a structured document with sections: Goals, Daily Breakdown, Habits to Focus On. "
-            "Use the create_and_send_plan_document tool."
-        )
-        
-        memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=10)
-        
-        response, _ = await self.conversation_service.respond_with_tools(
-            prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
-        )
-        
-        # Tool should have handled document creation; send confirmation
-        await self.bot.send_message(user.tg_chat_id, f"📅 Your weekly plan is ready!\n\n{response}")
-        
-        logger.info("Weekly plan generated for user {}", user.id)
+        try:
+            now = datetime.now()
+            week_start = now.strftime("%b %d")
+            week_end = (now + timedelta(days=7)).strftime("%b %d")
+            
+            prompt = (
+                f"Generate a detailed weekly plan for {week_start} to {week_end}. "
+                "Use my goals, recent episodes, and habits. "
+                "Create a structured document with sections: Goals, Daily Breakdown, Habits to Focus On. "
+            )
+            
+            memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=10)
+            
+            response, _ = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            )
+            
+            # Tool should have handled document creation; send confirmation
+            await self.bot.send_message(user.tg_chat_id, f"📅 Your weekly plan is ready!\n\n{response}")
+            
+            logger.info("Weekly plan generated for user {}", user.id)
+        except Exception as e:
+            logger.exception("Error generating weekly plan for user {}: {}", user.id, e)
+            raise
 
     async def monthly_plan(self, user: User):
         """
         Generate monthly plan.
         """
-        now = datetime.now()
-        month = now.strftime("%B %Y")
-        
-        prompt = (
-            f"Generate a comprehensive monthly plan for {month}. "
-            "Review my long-term goals, past achievements, and set milestones. "
-            "Structure: Overview, Weekly Themes, Key Milestones, Habits. "
-            "Use the create_and_send_plan_document tool."
-        )
-        
-        memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=15)
-        
-        response, _ = await self.conversation_service.respond_with_tools(
-            prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
-        )
-        
-        await self.bot.send_message(user.tg_chat_id, f"📆 Your monthly plan is ready!\n\n{response}")
-        
-        logger.info("Monthly plan generated for user {}", user.id)
+        try:
+            now = datetime.now()
+            month = now.strftime("%B %Y")
+            
+            prompt = (
+                f"Generate a comprehensive monthly plan for {month}. "
+                "Review my long-term goals, past achievements, and set milestones. "
+                "Structure: Overview, Weekly Themes, Key Milestones, Habits. "
+            )
+            
+            memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=15)
+            
+            response, _ = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            )
+            
+            await self.bot.send_message(user.tg_chat_id, f"📆 Your monthly plan is ready!\n\n{response}")
+            
+            logger.info("Monthly plan generated for user {}", user.id)
+        except Exception as e:
+            logger.exception("Error generating monthly plan for user {}: {}", user.id, e)
+            raise

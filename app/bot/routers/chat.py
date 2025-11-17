@@ -58,7 +58,14 @@ async def handle_chat(message: Message, session):
     mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
     tool_executor = ToolExecutor(session, mcp_client)
 
-    user_time = get_time_in_zone(user.user_timezone)
+    # Get current time in user's timezone (or UTC if not set)
+    try:
+        user_time = get_time_in_zone(user.user_timezone)
+    except Exception as e:
+        logger.warning("Failed to get time in zone for user {}: {}", user.id, e)
+        # Fallback to UTC time
+        from datetime import datetime, timezone
+        user_time = datetime.now(timezone.utc).isoformat()
 
     # Generate response and get updated history
     reply, updated_history = await conversation_service.respond_with_tools(
@@ -77,7 +84,7 @@ async def handle_chat(message: Message, session):
     await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
 
     try:
-        info_text = f"User: {user_text}\nAI Assistant: {reply}"
+        info_text = f"User message: {user_text}\nAI Assistant message: {reply}"
         has_important_info = await extractor_service.find_write_important_info(user.id, session, info_text)
         logger.info("Important info extraction for user {}: {}", user.id, has_important_info)
     except Exception as e:
@@ -88,7 +95,7 @@ async def handle_chat(message: Message, session):
         logger.info("Cleared duplicate facts for user {}", user.id)
     except ValueError as e:
         if "The truth value of an array with more than one element is ambiguous" in str(e):
-            logger.error("Numpy array truth value error in clear_duplicate_facts for user %s: %s", user.id, e)
+            logger.error(f"Numpy array truth value error in clear_duplicate_facts for user {user.id}: {e}")
         else:
             logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)
     except Exception as e:
