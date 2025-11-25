@@ -55,7 +55,6 @@ class CoreMemoryService:
 
         # Update core text and metadata on the user's core memory
         cm.core_text = fact_text
-        # there is no metadata_json field on CoreMemory; we'll ignore or log metadata
         cm.updated_at = datetime.now(timezone.utc)
         session.add(cm)
         await session.flush()  # ensure cm.id is available

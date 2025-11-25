@@ -34,13 +34,20 @@ cp .env.example .env
 
 2. **Edit `.env`** with your tokens and secrets
 
-3. **Generate encryption key:**
+3. **Generate encryption keys:**
 
 ```bash
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# For structured data encryption (Tink AES256-GCM)
+poetry run python scripts/generate_data_keyset.py
 ```
 
-Add to `.env` as `ENCRYPTION_KEY`
+Add to `.env`:
+
+```
+ENCRYPTION_KEY=...
+DATA_ENCRYPTION_KEYSET_B64=...
+```
 
 4. **Start services:**
 
@@ -206,3 +213,11 @@ For >1000 users:
 ✅ Admin user IDs restricted  
 ✅ SSL/TLS enabled  
 ✅ Rate limiting active  
+✅ DATA_ENCRYPTION_KEYSET_B64 stored in a secret manager  
+
+### Data encryption
+
+- Structured user data (profiles, memories, tasks, habits, settings) is encrypted in Postgres using Google Tink AEAD.
+- Generate a keyset with `poetry run python scripts/generate_data_keyset.py` and store the base64 output in `DATA_ENCRYPTION_KEYSET_B64`.
+- Rotate the keyset periodically; re-encrypt columns by re-saving records or running a dedicated data-migration job.
+- To encrypt historical rows after deploying the new types, run `poetry run python scripts/backfill_encrypted_columns.py`.

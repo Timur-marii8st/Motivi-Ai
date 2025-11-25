@@ -1,9 +1,10 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, date
-from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
-from sqlalchemy import DateTime
+from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlalchemy import DateTime, Column
 from pgvector.sqlalchemy import Vector
 
+from ..security.encrypted_types import EncryptedTextType
 
 if TYPE_CHECKING:
     from .users import User
@@ -19,7 +20,14 @@ class WorkingMemory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
 
-    working_memory_text: Optional[str] = Field(default=None, max_length=2000)
+    working_memory_text: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        sa_column=Column(
+            EncryptedTextType("working_memory.working_memory_text"),
+            nullable=True,
+        ),
+    )
     history_order: Optional[int] = Field(default=None, index=True)
 
     decay_date: Optional[date] = Field(default=None, index=True)
@@ -40,7 +48,14 @@ class WorkingMemoryEntry(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
 
-    working_memory_text: Optional[str] = Field(default=None, max_length=2000)
+    working_memory_text: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        sa_column=Column(
+            EncryptedTextType("working_memory_entry.working_memory_text"),
+            nullable=True,
+        ),
+    )
     history_order: Optional[int] = Field(default=None, index=True)
 
     created_at: datetime = Field(

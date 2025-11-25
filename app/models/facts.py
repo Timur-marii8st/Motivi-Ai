@@ -3,7 +3,7 @@ from typing import List, Literal
 
 class Fact(BaseModel):
     fact: str
-    importance: Literal["High", "Medium", "Low"]
+    importance: Literal["Core", "Episode", "Working"]
 
     # Validation to ensure no empty strings
     @field_validator('fact')

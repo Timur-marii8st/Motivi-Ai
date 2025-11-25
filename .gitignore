@@ -8,6 +8,7 @@ __pycache__/
 
 .vscode/
 .idea/
+.gptree_config
 
 .DS_Store
 Thumbs.db

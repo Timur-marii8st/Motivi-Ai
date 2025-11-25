@@ -47,7 +47,7 @@ class ExtractorService:
                 "subject": "person or entity name",
                 "relation": "simple verb phrase",
                 "object": "target of relation",
-                "importance": "High | Medium | Low"
+                "importance": "Core | Episode | Working"
                 }
             ]
             }"""
@@ -82,7 +82,7 @@ class ExtractorService:
                 if facts:
                     try:
                         for item in facts:
-                            if item.importance == "High":
+                            if item.importance == "Core":
                                 await core_memory_service.store_core(
                                     session=session,
                                     user_id=user_id,
@@ -90,7 +90,7 @@ class ExtractorService:
                                 )
                                 logger.info(f"Important fact extracted: {item.fact} (Importance: {item.importance})")
                             
-                            if item.importance == "Medium":
+                            if item.importance == "Episode":
                                 await episodic_memory_service.store_episode(
                                     session=session,
                                     user_id=user_id,
@@ -98,7 +98,7 @@ class ExtractorService:
                                 )
                                 logger.info(f"Episodic memory fact extracted: {item.fact} (Importance: {item.importance})")
 
-                            if item.importance == "Low":
+                            if item.importance == "Working":
                                 await working_memory_service.store_working(
                                     session=session,
                                     user_id=user_id,

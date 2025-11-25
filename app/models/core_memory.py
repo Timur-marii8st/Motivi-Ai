@@ -1,8 +1,10 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
-from sqlalchemy import Text, DateTime
+from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlalchemy import DateTime, Column
 from pgvector.sqlalchemy import Vector
+
+from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
 
 if TYPE_CHECKING:
     from .users import User
@@ -15,8 +17,14 @@ class CoreMemory(SQLModel, table=True):
     user_id: int = Field(index=True, foreign_key="users.id")
     # Use a plain Python type for annotations so pydantic can generate a schema.
     # Keep the SQLAlchemy Text column via `sa_column` so the DB column is Text.
-    core_text: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))    
-    sleep_schedule_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    core_text: Optional[str] = Field(
+        default=None,
+        sa_column=Column(EncryptedTextType("core_memory.core_text"), nullable=True),
+    )
+    sleep_schedule_json: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(EncryptedJSONType("core_memory.sleep_schedule")),
+    )
 
     # Use timezone-aware UTC datetimes and a timezone-aware DB column.
     updated_at: datetime = Field(

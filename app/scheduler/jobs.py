@@ -104,6 +104,32 @@ async def monthly_plan_job(user_id: int):
     finally:
         await session.close()
 
+async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: str):
+    """Send a one-off reminder message to the user (scheduled by LLM tool)."""
+    logger.info("Running one-off reminder for user {}", user_id)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            logger.info("User {} is in break mode; skipping one-off reminder", user_id)
+            return
+
+        user = await session.get(User, user_id)
+        if not user:
+            logger.warning("User {} not found for one-off reminder", user_id)
+            return
+
+        from aiogram import Bot
+        from ..config import settings
+
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+        await bot.send_message(chat_id, message_text)
+        logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
+    except Exception as e:
+        logger.exception("Error in send_one_off_reminder_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
+
 async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
     """Check if user is in break mode."""
     result = await session.execute(select(UserSettings).where(UserSettings.user_id == user_id))

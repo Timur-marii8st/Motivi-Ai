@@ -9,6 +9,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from loguru import logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,8 @@ class GoogleCalendarService:
         """Retrieve and decrypt stored credentials for a user.
 
         Returns None when no token is stored or decryption/refresh fails.
+        Also marks the token as requiring re-authorization when Google signals
+        that the refresh token has been revoked or expired (invalid_grant).
         """
         result = await session.execute(
             select(OAuthToken).where(
@@ -83,6 +86,18 @@ class GoogleCalendarService:
                 try:
                     await asyncio.to_thread(creds.refresh, Request())
                     await GoogleCalendarService.store_credentials(session, user_id, creds)
+                except RefreshError as e:
+                    # Token revoked/expired, mark as needing re-auth
+                    logger.warning(
+                        "Google credentials refresh failed with invalid_grant for user %s: %s",
+                        user_id,
+                        e,
+                    )
+                    if hasattr(token_record, "needs_reauth"):
+                        token_record.needs_reauth = True
+                        session.add(token_record)
+                        await session.flush()
+                    return None
                 except Exception:
                     logger.exception("Failed to refresh Google credentials for user %s", user_id)
                     return None

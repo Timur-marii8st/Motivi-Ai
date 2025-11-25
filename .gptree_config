@@ -6,7 +6,7 @@ useGitIgnore: true
 # File types to include (e.g., .py,.js)
 includeFileTypes: *
 # File types to exclude when includeFileTypes is '*'
-excludeFileTypes: .md, .env, .lock
+excludeFileTypes: .md, .env, .lock, .pyc
 # Output file name
 outputFile: gptree_output.txt
 # Whether to output the file locally or relative to the project directory

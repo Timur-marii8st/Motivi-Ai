@@ -2,20 +2,6 @@
 Tool/function definitions for Gemini function calling.
 """
 
-TOOL_CREATE_TASK = {
-    "name": "create_task",
-    "description": "Create a new task for the user with title, description, and optional due date.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string", "description": "Task title"},
-            "description": {"type": "string", "description": "Task description"},
-            "due_date_iso": {"type": "string", "description": "ISO format due date (YYYY-MM-DDTHH:MM:SS) or null"},
-        },
-        "required": ["title"],
-    },
-}
-
 SEND_TELEGRAM_MESSAGE_AND_PIN = {
     "name": "send_telegram_message_and_pin",
     "description": "Send an important message in the user's Telegram chat and pin it.",
@@ -26,6 +12,19 @@ SEND_TELEGRAM_MESSAGE_AND_PIN = {
             "disable_notification": {"type": "boolean", "description": "Send silently without sound", "default": False},
         },
         "required": ["message_text"],
+    },
+}
+
+TOOL_SCHEDULE_REMINDER = {
+    "name": "schedule_reminder",
+    "description": "Schedule a one-off motivational reminder message for the user at a specific datetime.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "message_text": {"type": "string", "description": "Text of the reminder message to send"},
+            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS, in user's local time or UTC as specified)."},
+        },
+        "required": ["message_text", "reminder_datetime_iso"],
     },
 }
 
@@ -58,8 +57,8 @@ TOOL_CHECK_AVAILABILITY = {
 }
 
 ALL_TOOLS = [
-    TOOL_CREATE_TASK,
     SEND_TELEGRAM_MESSAGE_AND_PIN,
+    TOOL_SCHEDULE_REMINDER,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
 ]

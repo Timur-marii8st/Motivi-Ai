@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     MCP_SECRET_TOKEN: str
 
     ENCRYPTION_KEY: str = Field(..., description="Must be 32 url-safe base64-encoded bytes")  # Must be 32 url-safe base64-encoded bytes
+    DATA_ENCRYPTION_KEYSET_B64: str = Field(
+        ...,
+        description="Base64-encoded JSON keyset for Tink AEAD (AES256_GCM by default)",
+    )
     
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""

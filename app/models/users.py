@@ -1,7 +1,9 @@
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime, timezone, time
-from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
-from sqlalchemy import DateTime
+from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlalchemy import DateTime, Column
+
+from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
 
 
 if TYPE_CHECKING:
@@ -23,7 +25,10 @@ class User(SQLModel, table=True):
     tg_user_id: int = Field(index=True)
     tg_chat_id: int = Field(index=True)
 
-    name: Optional[str] = None
+    name: Optional[str] = Field(
+        default=None,
+        sa_column=Column(EncryptedTextType("users.name"), nullable=True),
+    )
     age: Optional[int] = None
 
     user_timezone: Optional[str] = Field(default=None, index=True)
@@ -31,7 +36,8 @@ class User(SQLModel, table=True):
     bed_time: Optional[time] = None
 
     occupation_json: Optional[dict] = Field(
-        default=None, sa_column=Column(JSON, nullable=True)
+        default=None,
+        sa_column=Column(EncryptedJSONType("users.occupation")),
     )
 
     created_at: datetime = Field(

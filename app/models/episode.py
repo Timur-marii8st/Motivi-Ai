@@ -1,9 +1,10 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, Column, JSON, Relationship
-from sqlalchemy import Text, DateTime
+from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import DateTime, Column
 from pgvector.sqlalchemy import Vector
 
+from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
 
 if TYPE_CHECKING:
     from .users import User
@@ -19,8 +20,13 @@ class Episode(SQLModel, table=True):
     user_id: int = Field(index=True, foreign_key="users.id")
     user: "User" = Relationship(back_populates="episodes")
 
-    text: str = Field(sa_column=Column(Text, nullable=False))
-    metadata_json: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    text: str = Field(
+        sa_column=Column(EncryptedTextType("episodes.text"), nullable=False)
+    )
+    metadata_json: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(EncryptedJSONType("episodes.metadata")),
+    )
 
     created_at: datetime = Field(
         sa_column=Column("created_at", DateTime(timezone=True), nullable=False, index=True),

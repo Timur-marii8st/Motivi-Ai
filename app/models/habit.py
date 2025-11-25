@@ -3,6 +3,8 @@ from datetime import datetime, timezone, date, time
 from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import Column, DateTime
 
+from ..security.encrypted_types import EncryptedTextType
+
 
 if TYPE_CHECKING:
     from .users import User
@@ -18,7 +20,11 @@ class Habit(SQLModel, table=True):
     user: "User" = Relationship(back_populates="habits")
 
     name: str = Field(max_length=200)
-    description: Optional[str] = Field(default=None, max_length=1000)
+    description: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        sa_column=Column(EncryptedTextType("habits.description"), nullable=True),
+    )
     
     # Cadence: daily, weekly, custom
     cadence: str = Field(default="daily", max_length=20, index=True)
@@ -59,7 +65,11 @@ class HabitLog(SQLModel, table=True):
     
     log_date: date = Field(index=True)
     count: int = Field(default=1)
-    note: Optional[str] = Field(default=None, max_length=500)
+    note: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        sa_column=Column(EncryptedTextType("habit_logs.note"), nullable=True),
+    )
     
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

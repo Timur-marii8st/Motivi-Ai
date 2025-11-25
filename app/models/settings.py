@@ -1,7 +1,9 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, time
-from sqlmodel import SQLModel, Field, Column, JSON, UniqueConstraint, Relationship
-from sqlalchemy import DateTime
+from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlalchemy import DateTime, Column
+
+from ..security.encrypted_types import EncryptedJSONType
 
 
 if TYPE_CHECKING:
@@ -36,7 +38,8 @@ class UserSettings(SQLModel, table=True):
 
     # Summary content preferences
     summary_preferences_json: Optional[dict] = Field(
-        default=None, sa_column=Column(JSON)
+        default=None,
+        sa_column=Column(EncryptedJSONType("user_settings.summary_preferences")),
     )  # e.g., {"include_habits": true, "include_calendar": true}
 
     created_at: datetime = Field(

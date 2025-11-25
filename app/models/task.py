@@ -1,7 +1,9 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Text, Column, DateTime
+from sqlalchemy import Column, DateTime
+
+from ..security.encrypted_types import EncryptedTextType
 
 
 if TYPE_CHECKING:
@@ -18,7 +20,10 @@ class Task(SQLModel, table=True):
     user: "User" = Relationship(back_populates="tasks")
 
     title: str = Field(max_length=200)
-    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    description: Optional[str] = Field(
+        default=None,
+        sa_column=Column(EncryptedTextType("tasks.description"), nullable=True),
+    )
     status: str = Field(default="todo", max_length=20, index=True)  # todo, doing, done
 
     due_dt: Optional[datetime] = Field(default=None, index=True)

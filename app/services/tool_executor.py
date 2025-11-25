@@ -5,7 +5,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..mcp_client.client import MCPClient
-from ..models.task import Task
+from apscheduler.triggers.date import DateTrigger
 
 class ToolExecutor:
     """
@@ -20,10 +20,10 @@ class ToolExecutor:
         Route tool call to appropriate handler.
         """
         try:
-            if tool_name == "create_task":
-                return await self._create_task(args, user_id)
-            elif tool_name == "send_telegram_message_and_pin":
+            if tool_name == "send_telegram_message_and_pin":
                 return await self._send_telegram_message_and_pin(args, chat_id)
+            elif tool_name == "schedule_reminder":
+                return await self._schedule_reminder(args, chat_id, user_id)
             elif tool_name == "create_calendar_event":
                 return await self._create_calendar_event(args, user_id)
             elif tool_name == "check_calendar_availability":
@@ -71,28 +71,35 @@ class ToolExecutor:
         
         return {"success": True, "available": available}
 
-    async def _create_task(self, args: Dict, user_id: int) -> Dict:
-        """Create a task in database."""
-        due_dt = None
-        if args.get("due_date_iso"):
-            try:
-                due_dt = datetime.fromisoformat(args["due_date_iso"])
-            except Exception:
-                pass
-        
-        task = Task(
-            user_id=user_id,
-            title=args["title"],
-            description=args.get("description"),
-            due_dt=due_dt,
-            status="todo",
-            created_from_plan=True,
+    async def _schedule_reminder(self, args: Dict, chat_id: int, user_id: int) -> Dict:
+        """Schedule a one-off Telegram reminder for the user via APScheduler."""
+        from datetime import datetime
+        from pytz import utc
+        from ..scheduler.scheduler_instance import scheduler
+
+        reminder_dt = datetime.fromisoformat(args["reminder_datetime_iso"])
+        # Assume reminder_dt is already in UTC or naive (treated as UTC)
+        if reminder_dt.tzinfo is None:
+            reminder_dt = reminder_dt.replace(tzinfo=utc)
+
+        job_id = f"reminder_{user_id}_{int(reminder_dt.timestamp())}"
+
+        # Avoid duplicates for same user/time
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+
+        trigger = DateTrigger(run_date=reminder_dt, timezone=utc)
+
+        scheduler.add_job(
+            func="app.scheduler.jobs:send_one_off_reminder_job",
+            trigger=trigger,
+            id=job_id,
+            args=[user_id, chat_id, args["message_text"]],
+            replace_existing=True,
         )
-        self.session.add(task)
-        await self.session.flush()
-        
-        logger.info("Created task {} for user {}", task.id, user_id)
-        return {"success": True, "task_id": task.id}
+
+        logger.info("Scheduled one-off reminder for user {} at {} (job_id={})", user_id, reminder_dt, job_id)
+        return {"success": True, "job_id": job_id}
 
     async def _send_telegram_message_and_pin(self, args: Dict, chat_id: int) -> Dict:
         """Pin a message."""
