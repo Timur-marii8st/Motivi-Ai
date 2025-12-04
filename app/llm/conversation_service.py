@@ -17,7 +17,7 @@ PERSONA_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "moti_system.tx
 
 class ConversationService:
     """
-    Generates Moti's responses using Gemini with full memory context and tool calling.
+    Generates Motivi's responses using Gemini with full memory context and tool calling.
     """
 
     def __init__(self):
@@ -40,7 +40,7 @@ class ConversationService:
             return PERSONA_PROMPT_PATH.read_text(encoding="utf-8")
         logger.warning("Persona prompt not found; using default")
         return (
-            "You are Moti, a proactive, caring planning assistant. "
+            "You are Motivi, a proactive, caring planning assistant. "
             "You help users organize their day, track habits, and stay motivated. "
             "Be warm, concise, and action-oriented."
         )
@@ -53,7 +53,6 @@ class ConversationService:
         tool_executor: ToolExecutor,
         session: AsyncSession,
         conversation_history: Optional[List[Content]] = None,
-        user_time: str = "00:00",
     ) -> Tuple[str, List[Content]]:
         """
         Generate a response with potential tool calls.
@@ -61,8 +60,7 @@ class ConversationService:
         """
         context_dict = memory_pack.to_context_dict()
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
-        time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
-        system_instruction = f"{self.persona_prompt}\n\n{context_block}\n\n{time_block}"
+        system_instruction = f"{self.persona_prompt}\n\n{context_block}"
         
         messages = conversation_history or []
 
@@ -106,7 +104,7 @@ class ConversationService:
 
             # Extract final text
             final_text = response.text.strip() if response.text else "Done! ✅"
-            logger.info("Moti responded: {}", final_text[:100])
+            logger.info("Motivi responded: {}", final_text[:100])
             
             if "?" in final_text:
                 await ProfileCompletenessService.increment_question_count(session, memory_pack.user.id)

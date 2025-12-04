@@ -24,11 +24,11 @@ from app.models.users import User  # noqa: F401
 from app.models.core_memory import CoreMemory  # noqa: F401
 from app.models.working_memory import WorkingMemory  # noqa: F401
 from app.models.episode import Episode, EpisodeEmbedding  # noqa: F401
-from app.models.task import Task  # noqa: F401
 from app.models.settings import UserSettings  # noqa: F401
 from app.models.habit import Habit, HabitLog  # noqa: F401
 from app.models.oauth_token import OAuthToken  # noqa: F401
 from app.models.profile_completeness import ProfileCompleteness  # noqa: F401
+from app.models.plan import Plan
 
 target_metadata = SQLModel.metadata
 

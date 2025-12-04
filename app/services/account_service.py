@@ -9,7 +9,6 @@ from ..models.users import User
 from ..models.core_memory import CoreMemory
 from ..models.working_memory import WorkingMemory
 from ..models.episode import Episode, EpisodeEmbedding
-from ..models.task import Task
 from ..models.settings import UserSettings
 from ..models.habit import Habit, HabitLog
 from ..models.oauth_token import OAuthToken
@@ -31,7 +30,7 @@ class AccountService:
             select(User)
             .where(User.id == user_id)
             .options(
-                selectinload(User.core_memory),
+                selectinload(User.core_memory).selectinload(CoreMemory.facts),
                 selectinload(User.working_memory),
                 selectinload(User.episodes),
                 selectinload(User.tasks),
@@ -66,6 +65,9 @@ class AccountService:
             },
             "core_memory": {
                 "sleep_schedule": core.sleep_schedule_json if core else None,
+                "core_facts": [
+                    {"fact": f.fact_text, "created_at": f.created_at.isoformat()} for f in core.facts
+                ] if core and getattr(core, "facts", None) is not None else [],
             },
             "working_memory": {
                 "working_memory_text": working.working_memory_text if working else None,
@@ -132,7 +134,6 @@ class AccountService:
             )
         ))
         await session.execute(delete(Habit).where(Habit.user_id == user_id))
-        await session.execute(delete(Task).where(Task.user_id == user_id))
         await session.execute(delete(OAuthToken).where(OAuthToken.user_id == user_id))
         await session.execute(delete(UserSettings).where(UserSettings.user_id == user_id))
         await session.execute(delete(WorkingMemory).where(WorkingMemory.user_id == user_id))

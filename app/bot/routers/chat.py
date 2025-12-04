@@ -34,12 +34,13 @@ fact_cleanup_service = FactCleanupService()
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_chat(message: Message, session):
     """
-    Natural conversation with Moti, using full memory context.
+    Natural conversation with Motivi, using full memory context.
     """
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
     if not user.name:
-        await message.answer("Let's start by setting up your profile! Use /start to begin.")
+        # Перевод: Предложение начать регистрацию
+        await message.answer("Давай сначала настроим твой профиль! Нажми /start, чтобы начать.")
         return
 
     user_text = message.text.strip()
@@ -52,7 +53,8 @@ async def handle_chat(message: Message, session):
         memory_pack = await memory_orchestrator.assemble(session, user, user_text, top_k=5)
     except Exception as e:
         logger.error("Memory assembly failed for user {}: {}", user.id, e)
-        await message.answer("Sorry, I'm having trouble recalling our history. Let me try again later.")
+        # Перевод: Сообщение об ошибке памяти
+        await message.answer("Извини, мне сложно вспомнить нашу историю прямо сейчас. Давай попробуем чуть позже.")
         return
     
     mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
@@ -66,6 +68,9 @@ async def handle_chat(message: Message, session):
         # Fallback to UTC time
         from datetime import datetime, timezone
         user_time = datetime.now(timezone.utc).isoformat()
+        
+    time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
+    user_text = f"{user_text}\n\n{time_block}"
 
     # Generate response and get updated history
     reply, updated_history = await conversation_service.respond_with_tools(
@@ -75,7 +80,6 @@ async def handle_chat(message: Message, session):
         tool_executor,
         session,
         conversation_history=history,
-        user_time=user_time
     )
 
     await message.answer(reply)

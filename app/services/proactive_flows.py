@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 
 from ..models.users import User
 from ..config import settings
@@ -21,7 +22,11 @@ class ProactiveFlows:
     """
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+
+        self.bot = Bot(
+            token=settings.TELEGRAM_BOT_TOKEN, 
+            default=DefaultBotProperties(parse_mode="HTML")
+        )
         
         # Services
         self.gemini_embeddings = GeminiEmbeddings()

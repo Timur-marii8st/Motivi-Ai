@@ -29,10 +29,13 @@ class WorkingMemoryService:
         wm = result.scalar_one_or_none()
         if not wm:
             # use configured lifetime days for decay_date
+            now = datetime.now(timezone.utc)
             wm = WorkingMemory(
                 user_id=user_id,
                 working_memory_text=None,
                 history_order=1,
+                created_at=now,
+                updated_at=now,
                 decay_date=date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS)),
             )
             session.add(wm)
@@ -96,12 +99,13 @@ class WorkingMemoryService:
             await session.delete(old)
 
         # Create new entry as newest (history_order=1)
+        now = datetime.now(timezone.utc)
         new_entry = WorkingMemoryEntry(
             user_id=user_id,
             working_memory_text=fact_text,
             history_order=1,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=now,
+            updated_at=now,
         )
         session.add(new_entry)
         await session.flush()
@@ -115,7 +119,7 @@ class WorkingMemoryService:
             emb = WorkingEntryEmbedding(
                 working_entry_id=new_entry.id,
                 embedding=emb_vector,
-                created_at=datetime.now(timezone.utc),
+                created_at=now,
             )
             session.add(emb)
             await session.flush()
@@ -127,7 +131,11 @@ class WorkingMemoryService:
         wm = await WorkingMemoryService.get_or_create(session, user_id)
         wm.working_memory_text = fact_text
         wm.decay_date = date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
-        wm.updated_at = datetime.now(timezone.utc)
+        wm.updated_at = now
+        # Only set created_at on first content storage (when working_memory_text was None)
+        if not hasattr(wm, '_created_at_set'):
+            wm.created_at = now
+            wm._created_at_set = True
         session.add(wm)
         await session.flush()
 

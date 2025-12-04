@@ -14,8 +14,8 @@ router = Router(name="onboarding")
 
 # === Start message ===
 WELCOME = (
-    "Hey, I’m Moti! 💫 I’ll help organize your days and keep you motivated.\n"
-    "Let’s set up your profile. What’s your first name?"
+    "Привет, я Мотиви! 💫 Я помогу тебе организовать день и поддержу мотивацию.\n"
+    "Давай настроим твой профиль. Как тебя зовут?"
 )
 
 # === Handlers ===
@@ -28,49 +28,49 @@ async def cmd_start(message: Message, state: FSMContext, session):
 @router.message(Onboarding.name, F.text, (F.text.len() > 0))
 async def get_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
-    await message.answer("Nice to meet you! How old are you?")
+    await message.answer("Приятно познакомиться! Сколько тебе лет?")
     await state.set_state(Onboarding.age)
 
 @router.message(Onboarding.age, F.text)
 async def get_age(message: Message, state: FSMContext):
     age = clamp_age(message.text.strip())
     if age is None:
-        await message.answer("Please enter a valid age (5–120).")
+        await message.answer("Пожалуйста, введи корректный возраст (от 5 до 120).")
         return
     await state.update_data(age=age)
-    await message.answer("What’s your IANA timezone? For example: Europe/Berlin, America/New_York, Asia/Tokyo")
+    await message.answer("Какой у тебя часовой пояс (IANA)? Например: Europe/Moscow, Asia/Novosibirsk или Europe/Berlin")
     await state.set_state(Onboarding.timezone)
 
 @router.message(Onboarding.timezone, F.text)
 async def get_timezone(message: Message, state: FSMContext):
     tz = message.text.strip()
     if not is_valid_timezone(tz):
-        await message.answer("That doesn’t look like a valid timezone. Try something like Europe/Berlin.")
+        await message.answer("Похоже, это неверный формат. Попробуй что-то вроде Europe/Moscow.")
         return
     await state.update_data(timezone=tz)
-    await message.answer("What time do you usually wake up? (HH:MM, 24h)")
+    await message.answer("Во сколько ты обычно просыпаешься? (ЧЧ:ММ, 24ч)")
     await state.set_state(Onboarding.wake_time)
 
 @router.message(Onboarding.wake_time, F.text)
 async def get_wake(message: Message, state: FSMContext):
     t = parse_hhmm(message.text.strip())
     if t is None:
-        await message.answer("Please use HH:MM format, e.g., 07:30")
+        await message.answer("Пожалуйста, используй формат ЧЧ:ММ, например 07:30")
         return
     await state.update_data(wake_time=t.isoformat(timespec="minutes"))
-    await message.answer("And your usual bedtime? (HH:MM, 24h)")
+    await message.answer("А когда обычно ложишься спать? (ЧЧ:ММ, 24ч)")
     await state.set_state(Onboarding.bed_time)
 
 @router.message(Onboarding.bed_time, F.text)
 async def get_bed(message: Message, state: FSMContext):
     t = parse_hhmm(message.text.strip())
     if t is None:
-        await message.answer("Please use HH:MM format, e.g., 23:00")
+        await message.answer("Пожалуйста, используй формат ЧЧ:ММ, например 23:00")
         return
     await state.update_data(bed_time=t.isoformat(timespec="minutes"))
     await message.answer(
-        "What’s your occupation? Tell me in your own words (what you do, employer, "
-        "key responsibilities, schedule, tools/skills)."
+        "Кем ты работаешь? Расскажи своими словами (должность, компания, "
+        "основные задачи, график, инструменты/навыки)."
     )
     await state.set_state(Onboarding.occupation)
 
@@ -94,7 +94,7 @@ async def get_occupation(message: Message, state: FSMContext, session):
         bed_time=bed
     )
 
-    await message.answer("Thanks! I’m structuring your occupation details… one moment ⏳")
+    await message.answer("Спасибо! Структурирую информацию о твоей деятельности… одну секунду ⏳")
 
     occ_struct = await parse_occupation_to_json(message.text.strip())
     await update_user_profile(session, user, occupation_json=occ_struct)
@@ -108,17 +108,17 @@ async def get_occupation(message: Message, state: FSMContext, session):
     JobManager.schedule_user_jobs(user, user_settings)
 
     summary = (
-        f"Here's what I've got:\n"
-        f"- Name: <b>{data['name']}</b>\n"
-        f"- Age: <b>{data['age']}</b>\n"
-        f"- Timezone: <b>{data['timezone']}</b>\n"
-        f"- Wake: <b>{data['wake_time']}</b>\n"
-        f"- Bed: <b>{data['bed_time']}</b>\n"
-        f"- Occupation: <code>{occ_struct.get('title', 'N/A')}</code>\n\n"
-        f"✅ Profile complete! I've scheduled morning check-ins at your wake time "
-        f"and evening wrap-ups 1 hour before bedtime.\n\n"
-        f"I'll also generate weekly plans every Sunday and monthly plans on the 1st. "
-        f"You can customize this with /settings (coming in Phase 5)."
+        f"Вот что я записала:\n"
+        f"- Имя: <b>{data['name']}</b>\n"
+        f"- Возраст: <b>{data['age']}</b>\n"
+        f"- Часовой пояс: <b>{data['timezone']}</b>\n"
+        f"- Подъем: <b>{data['wake_time']}</b>\n"
+        f"- Отбой: <b>{data['bed_time']}</b>\n"
+        f"- Деятельность: <code>{occ_struct.get('title', 'Не определено')}</code>\n\n"
+        f"✅ Профиль готов! Я запланировала утренние приветствия во время твоего пробуждения "
+        f"и вечерние итоги за час до сна.\n\n"
+        f"Также я буду составлять планы на неделю по воскресеньям и на месяц 1-го числа. "
+        f"Ты сможешь настроить это через /settings (скоро)."
     )
     await message.answer(summary)
     await state.clear()

@@ -2,7 +2,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
+from sqlmodel import select, delete
+from aiogram.client.default import DefaultBotProperties 
 
 from ..db import AsyncSessionLocal
 from ..models.users import User
@@ -119,10 +120,14 @@ async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: st
             return
 
         from aiogram import Bot
-        from ..config import settings
-
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+        
+        bot = Bot(
+            token=settings.TELEGRAM_BOT_TOKEN, 
+            default=DefaultBotProperties(parse_mode="HTML")
+        )
+        
         await bot.send_message(chat_id, message_text)
+        await bot.session.close() # Good practice to close the session since it's one-off
         logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
     except Exception as e:
         logger.exception("Error in send_one_off_reminder_job for user {}: {}", user_id, e)
@@ -158,7 +163,6 @@ async def habit_reminder_job(habit_id: int):
     try:
         from ..models.habit import Habit
         from aiogram import Bot
-        from ..config import settings
         
         habit = await session.get(Habit, habit_id)
         if not habit or not habit.active:
@@ -185,7 +189,10 @@ async def habit_reminder_job(habit_id: int):
         if not user:
             return
         
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+        bot = Bot(
+            token=settings.TELEGRAM_BOT_TOKEN, 
+            default=DefaultBotProperties(parse_mode="HTML")
+        )
         
         message = (
             f"⏰ Habit Reminder: <b>{habit.name}</b>\n\n"
@@ -194,6 +201,7 @@ async def habit_reminder_job(habit_id: int):
         )
         
         await bot.send_message(user.tg_chat_id, message)
+        await bot.session.close() # Close session
         logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
     except Exception as e:
         logger.exception("Error in habit_reminder_job for habit {}: {}", habit_id, e)

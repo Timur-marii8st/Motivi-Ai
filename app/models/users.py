@@ -1,7 +1,8 @@
 from typing import Optional, List, TYPE_CHECKING
-from datetime import datetime, timezone, time
+from datetime import datetime, timezone, time, timedelta
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
 from sqlalchemy import DateTime, Column
+from ..config import settings
 
 from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
 
@@ -12,9 +13,9 @@ if TYPE_CHECKING:
     from .settings import UserSettings
     from .profile_completeness import ProfileCompleteness
     from .episode import Episode
-    from .task import Task
     from .habit import Habit
     from .oauth_token import OAuthToken
+    from .plan import Plan
 
 
 class User(SQLModel, table=True):
@@ -49,6 +50,11 @@ class User(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
+    subscription_ends_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
+    )
+
     # --- Relationships ---
     # One-to-One relationships
     core_memory: Optional["CoreMemory"] = Relationship(back_populates="user", sa_relationship_kwargs={"uselist": False})
@@ -58,9 +64,29 @@ class User(SQLModel, table=True):
 
     # One-to-Many relationships
     episodes: List["Episode"] = Relationship(back_populates="user")
-    tasks: List["Task"] = Relationship(back_populates="user")
     habits: List["Habit"] = Relationship(back_populates="user")
     oauth_tokens: List["OAuthToken"] = Relationship(back_populates="user")
+    plans: List["Plan"] = Relationship(back_populates="user")
+
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc)
+
+    @property
+    def is_premium(self) -> bool:
+        """Check if subscription is active."""
+        if self.subscription_ends_at:
+            return self.subscription_ends_at > datetime.now(timezone.utc)
+        return False
+    
+    @property
+    def is_trial(self) -> bool:
+        """Check if user is within the 7-day trial period."""
+        if self.is_premium:
+            return False
+        
+        # Trial expires TRIAL_DAYS after creation
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.TRIAL_DAYS)
+        return self.created_at > cutoff
 
     def touch(self) -> None:
         self.updated_at = datetime.now(timezone.utc)

@@ -17,8 +17,3 @@ class MCPClient:
         resp = await self._client.post(f"{self.base_url}/tools/send_file", json=payload, headers=self.headers)
         resp.raise_for_status()
         return resp.json()["message_id"]
-
-    async def send_telegram_message_and_pin(self, chat_id: int, message_text: str, disable_notification: bool = True):
-        payload = {"chat_id": chat_id, "message_text": message_text, "disable_notification": disable_notification}
-        resp = await self._client.post(f"{self.base_url}/tools/send_telegram_message_and_pin", json=payload, headers=self.headers)
-        resp.raise_for_status()

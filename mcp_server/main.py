@@ -33,7 +33,6 @@ async def health():
 # Tool endpoints
 from .schemas import (
     SendFileRequest,
-    SendPinMessageRequest
 )
 
 @app.post("/tools/send_file", dependencies=[Depends(verify_token)])
@@ -47,17 +46,4 @@ async def send_file_endpoint(req: SendFileRequest):
         return {"success": True, "message_id": message_id}
     except Exception as e:
         logger.exception("send_file failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/tools/send_telegram_message_and_pin", dependencies=[Depends(verify_token)])
-async def send_telegram_message_and_pin_endpoint(req: SendPinMessageRequest):
-    try:
-        await telegram_tool.send_telegram_message_and_pin(
-            chat_id=req.chat_id,
-            message_text=req.message_text,
-            disable_notification=req.disable_notification,
-        )
-        return {"success": True}
-    except Exception as e:
-        logger.exception("send_telegram_message_and_pin failed")
         raise HTTPException(status_code=500, detail=str(e))

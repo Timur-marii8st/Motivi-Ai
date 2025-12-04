@@ -31,7 +31,6 @@ async def init_db() -> None:
     from .models.core_memory import CoreMemory
     from .models.working_memory import WorkingMemory
     from .models.episode import Episode, EpisodeEmbedding
-    from .models.task import Task
     from .models.settings import UserSettings
     from .models.habit import Habit, HabitLog
     from .models.oauth_token import OAuthToken

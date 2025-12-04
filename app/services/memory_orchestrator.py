@@ -1,11 +1,11 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
 
 from ..models.users import User
-from ..models.task import Task
 from ..models.core_memory import CoreMemory
 from ..models.working_memory import WorkingMemory, WorkingMemoryEntry
 from ..models.episode import Episode
@@ -19,9 +19,9 @@ class MemoryPack:
         self,
         user: User,
         core: CoreMemory,
+        core_facts: Optional[List] ,
         working: WorkingMemory,
         episodes: List[Episode],
-        tasks: Optional[List[Task]] = None,
         working_history: Optional[List[WorkingMemory]] = None,
     ):
         self.user = user
@@ -29,8 +29,9 @@ class MemoryPack:
         self.working = working
         self.episodes = episodes
         # outside of the async DB context which triggers MissingGreenlet
-        self.tasks = tasks or []
         self.working_history = working_history or []
+        # List of CoreFact objects (may be empty)
+        self.core_facts = core_facts or []
 
     def to_context_dict(self) -> Dict[str, Any]:
         """Serialize for LLM prompt injection."""
@@ -42,30 +43,25 @@ class MemoryPack:
                 "wake_time": self.user.wake_time.isoformat() if self.user.wake_time else None,
                 "bed_time": self.user.bed_time.isoformat() if self.user.bed_time else None,
                 "occupation": self.user.occupation_json,
-                # tasks is a list of dicts with minimal task info
-                "tasks": [
-                    {
-                        "title": t.title,
-                        "status": t.status,
-                        "due_dt": t.due_dt.isoformat() if getattr(t, "due_dt", None) else None,
-                    }
-                    for t in self.tasks
-                ],
             },
-            "core_memory": {
+                "core_memory": {
                 "sleep_schedule": self.core.sleep_schedule_json,
-                "core_facts": self.core.core_text,
-                "last_updated": self.core.updated_at.isoformat() if self.core.updated_at else None,
+                # Provide a list of core facts each with their created_at so LLMs receive structured facts
+                "core_facts": [
+                    {"fact": cf.fact_text, "created_at": cf.created_at.isoformat() if cf.created_at else None}
+                    for cf in self.core_facts
+                ],
+                # Keep the overall created_at for backward compatibility (when this record was created)
+                "created_at": self.core.created_at.isoformat() if self.core.created_at else None,
             },
             "working_memory": {
                 "current": self.working.working_memory_text,
-                "current_updated_at": self.working.updated_at.isoformat() if self.working.updated_at else None,
+                "created_at": self.working.created_at.isoformat() if self.working.created_at else None,
                 "history": [
                     {
                         "text": w.working_memory_text,
                         "order": w.history_order,
                         "created_at": w.created_at.isoformat() if w.created_at else None,
-                        "updated_at": w.updated_at.isoformat() if w.updated_at else None,
                     }
                     for w in sorted(self.working_history, key=lambda x: x.history_order or 999)
                 ],
@@ -98,15 +94,14 @@ class MemoryOrchestrator:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
         """
-        core_results = await self.core_service.retrieve_similar(
+        # Retrieve similar CoreFact entries (per-fact retrieval)
+        similar_core_facts = await self.core_service.retrieve_similar(
             session, user.id, query_text=query_text
         )
-        # core_service.retrieve_similar returns a list; we expect a single CoreMemory.
-        # Prefer the top hit when present, otherwise ensure a CoreMemory row exists.
-        if core_results:
-            core = core_results[0]
-        else:
-            core = await self.core_service.get_or_create(session, user.id)
+        # Ensure CoreMemory row exists
+        core = await self.core_service.get_or_create(session, user.id)
+        # List all core facts for the user (for full context)
+        core_facts = await self.core_service.list_facts_for_user(session, user.id)
 
         working_results = await self.working_service.retrieve_similar(
             session, user.id, query_text=query_text
@@ -135,17 +130,11 @@ class MemoryOrchestrator:
             "Assembled memory pack for user {}: {} episodes retrieved", user.id, len(episodes)
         )
 
-        # Eagerly load tasks using the provided async session so we don't
-        # trigger a lazy load later outside of the DB context (which causes
-        # the MissingGreenlet error).
-        tasks_result = await session.execute(select(Task).where(Task.user_id == user.id))
-        tasks = tasks_result.scalars().all()
-
         return MemoryPack(
             user=user,
             core=core,
+            core_facts=core_facts,
             working=working,
             episodes=episodes,
-            tasks=tasks,
-            working_history=working_history
+            working_history=working_history,
         )

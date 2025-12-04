@@ -102,7 +102,7 @@ class ProfileCompletenessService:
 
     @staticmethod
     async def increment_question_count(session: AsyncSession, user_id: int):
-        """Track that Moti asked a question."""
+        """Track that Motivi asked a question."""
         pc = await ProfileCompletenessService.get_or_create(session, user_id)
         pc.total_questions_asked += 1
         pc.touch()

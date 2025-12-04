@@ -22,17 +22,3 @@ async def send_file(chat_id: int, file_path: str, caption: str | None = None) ->
     message = await bot.send_document(chat_id=chat_id, document=input_file, caption=caption)
     logger.info("Sent file to chat {}: message_id={}", chat_id, message.message_id)
     return message.message_id
-
-async def send_telegram_message_and_pin(chat_id: int, message: str, disable_notification: bool = True):
-    """
-    Send and pin a message in a Telegram chat.
-    """
-    sent_message = await bot.send_message(chat_id=chat_id, text=message, disable_notification=disable_notification)
-    message_id = sent_message.message_id
-    await bot.pin_chat_message(
-        chat_id=chat_id,
-        message_id=message_id,
-        disable_notification=disable_notification,
-    )
-
-    logger.info("send and inned message {} in chat {}", message_id, chat_id)

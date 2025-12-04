@@ -9,6 +9,7 @@ __pycache__/
 .vscode/
 .idea/
 .gptree_config
+.qodo/
 
 .DS_Store
 Thumbs.db

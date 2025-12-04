@@ -53,6 +53,19 @@ class Settings(BaseSettings):
     # Fact cleanup
     # similarity threshold for deduplication (cosine similarity). Value in [0,1].
     FACT_CLEANUP_SIMILARITY_THRESHOLD: float = 0.95
+
+    # Subscription & Limits
+    TRIAL_DAYS: int = 7
+    # 100 Stars is approx $2.00 (Standard Telegram pricing is ~0.02 USD per star)
+    SUBSCRIPTION_PRICE_STARS: int = 100 
+    
+    # Technical Limit (Anti-Spam)
+    LIMIT_TECHNICAL_SECONDS: int = 2  # 1 message every 2 seconds
+    
+    # Daily Quotas
+    LIMIT_DAILY_TRIAL: int = 20      # Guest/Trial
+    LIMIT_DAILY_PREMIUM: int = 200   # Subscriber
+    LIMIT_DAILY_EXPIRED: int = 0     # Hard block after trial ends
     
     @property
     def admin_ids(self) -> list[int]:

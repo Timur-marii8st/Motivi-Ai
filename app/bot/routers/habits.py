@@ -2,9 +2,10 @@ from __future__ import annotations
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
-from datetime import date
 from loguru import logger
 from ..states import HabitCreation
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 
 from ...services.profile_services import get_or_create_user
@@ -103,7 +104,7 @@ async def log_habit_cmd(message: Message, session):
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
     
     try:
-        log = await HabitService.log_habit(session, habit_id, date.today())
+        log = await HabitService.log_habit(session, habit_id, datetime.now(timezone.utc).astimezone(ZoneInfo(user.timezone)).date())
         await session.commit()
         
         habit = await session.get(Habit, habit_id)

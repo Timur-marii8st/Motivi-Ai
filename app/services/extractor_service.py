@@ -44,9 +44,7 @@ class ExtractorService:
             {
             "facts": [
                 {
-                "subject": "person or entity name",
-                "relation": "simple verb phrase",
-                "object": "target of relation",
+                "fact": "user personal information text",
                 "importance": "Core | Episode | Working"
                 }
             ]
