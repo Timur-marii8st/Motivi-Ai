@@ -84,15 +84,45 @@ class ToolExecutor:
         """Schedule a one-off Telegram reminder for the user via APScheduler."""
         import uuid
         from datetime import datetime
-        from pytz import utc
-        from ..scheduler.scheduler_instance import scheduler
+        from pytz import utc as _utc
+        from ..scheduler.scheduler_instance import scheduler, start_scheduler
 
         reminder_dt = datetime.fromisoformat(args["reminder_datetime_iso"])
-        # Ensure reminder_dt is in UTC
+        # Determine timezone to interpret the datetime if it's naive.
+        # Priority: explicit args['timezone'] -> user's configured timezone -> UTC
+        tzname = args.get("timezone")
+        user_timezone = None
+        if not tzname:
+            try:
+                from ..models.users import User
+                result = await self.session.get(User, user_id)
+                user_timezone = getattr(result, "user_timezone", None)
+            except Exception:
+                user_timezone = None
+
+        if tzname is None and user_timezone:
+            tzname = user_timezone
+
+        # If reminder_dt is timezone-aware already, use it; otherwise localize
+        from zoneinfo import ZoneInfo
+        now_utc = datetime.now(_utc)
         if reminder_dt.tzinfo is None:
-            reminder_dt = reminder_dt.replace(tzinfo=utc)
-        elif reminder_dt.tzinfo != utc:
-            reminder_dt = reminder_dt.astimezone(utc)
+            if tzname:
+                try:
+                    reminder_dt = reminder_dt.replace(tzinfo=ZoneInfo(tzname))
+                except Exception:
+                    # Fall back to UTC if timezone name invalid
+                    reminder_dt = reminder_dt.replace(tzinfo=_utc)
+            else:
+                reminder_dt = reminder_dt.replace(tzinfo=_utc)
+        else:
+            # Convert to UTC for consistency
+                reminder_dt = reminder_dt.astimezone(_utc)
+
+        # Do not allow scheduling reminders in the past
+        if reminder_dt <= now_utc:
+            logger.warning("Attempted to schedule reminder in the past: {} (now={})", reminder_dt, now_utc)
+            return {"success": False, "error": "Cannot schedule a reminder in the past. Please provide a future UTC datetime."}
 
         # Generate unique job_id that includes user_id to avoid collisions
         unique_id = str(uuid.uuid4())[:8]
@@ -103,7 +133,15 @@ class ToolExecutor:
             scheduler.remove_job(job_id)
 
         from apscheduler.triggers.date import DateTrigger
-        trigger = DateTrigger(run_date=reminder_dt, timezone=utc)
+        # Ensure the scheduler is running, so the job will execute
+        try:
+            if not scheduler.running:
+                start_scheduler()
+        except Exception:
+            # If we cannot import or start scheduler, continue; job might be persisted for later worker
+            logger.debug("Could not ensure scheduler was running when scheduling reminder")
+
+        trigger = DateTrigger(run_date=reminder_dt, timezone=_utc)
 
         scheduler.add_job(
             func="app.scheduler.jobs:send_one_off_reminder_job",
@@ -147,13 +185,17 @@ class ToolExecutor:
         user_jobs = [job for job in scheduler.get_jobs() if job.id.startswith(prefix)]
         
         reminders = []
+        from datetime import timezone as _dt_timezone
         for job in user_jobs:
             # Extract reminder details from job
             if job.trigger and hasattr(job.trigger, 'run_date'):
                 run_date = job.trigger.run_date
                 # Convert to ISO format if it's a datetime
                 if isinstance(run_date, datetime):
-                    run_date_iso = run_date.isoformat()
+                    try:
+                        run_date_iso = run_date.astimezone(_dt_timezone.utc).isoformat()
+                    except Exception:
+                        run_date_iso = run_date.isoformat()
                 else:
                     run_date_iso = str(run_date)
             else:

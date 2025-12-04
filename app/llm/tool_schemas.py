@@ -9,7 +9,8 @@ TOOL_SCHEDULE_REMINDER = {
         "type": "object",
         "properties": {
             "message_text": {"type": "string", "description": "Text of the reminder message to send"},
-            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS) in UTC timezone. Example: 2025-11-26T15:30:00"},
+            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format. Can be timezone-aware (YYYY-MM-DDTHH:MM:SS+HH:MM or Z), or naive local time (YYYY-MM-DDTHH:MM:SS) in which case 'timezone' should be provided or the user's configured timezone will be used. Example timezone-aware: 2025-11-26T15:30:00Z"},
+            "timezone": {"type": "string", "description": "Optional IANA timezone name (e.g., Europe/Moscow). If provided and the datetime is naive, the datetime will be interpreted in this timezone and converted to UTC."},
         },
         "required": ["message_text", "reminder_datetime_iso"],
     },
