@@ -87,7 +87,11 @@ class ToolExecutor:
         from pytz import utc as _utc
         from ..scheduler.scheduler_instance import scheduler, start_scheduler
 
-        reminder_dt = datetime.fromisoformat(args["reminder_datetime_iso"])
+        # Accept ISO datetimes and 'Z' suffix by normalization
+        iso_str = args["reminder_datetime_iso"]
+        if iso_str.endswith("Z"):
+            iso_str = iso_str[:-1] + "+00:00"
+        reminder_dt = datetime.fromisoformat(iso_str)
         # Determine timezone to interpret the datetime if it's naive.
         # Priority: explicit args['timezone'] -> user's configured timezone -> UTC
         tzname = args.get("timezone")
@@ -151,8 +155,24 @@ class ToolExecutor:
             replace_existing=True,
         )
 
+        # Build human-friendly time info
+        scheduled_utc_iso = reminder_dt.astimezone(_utc).isoformat()
+        scheduled_local_iso = None
+        if tzname:
+            try:
+                from zoneinfo import ZoneInfo
+                scheduled_local_iso = reminder_dt.astimezone(ZoneInfo(tzname)).isoformat()
+            except Exception:
+                scheduled_local_iso = scheduled_utc_iso
+
         logger.info("Scheduled one-off reminder for user {} at {} (job_id={})", user_id, reminder_dt, job_id)
-        return {"success": True, "job_id": job_id}
+        return {
+            "success": True,
+            "job_id": job_id,
+            "scheduled_for_utc": scheduled_utc_iso,
+            "scheduled_for_local": scheduled_local_iso,
+            "timezone": tzname or "UTC",
+        }
 
     async def _cancel_reminder(self, args: Dict, user_id: int) -> Dict:
         """Cancel a scheduled reminder by job_id."""
@@ -203,11 +223,32 @@ class ToolExecutor:
             
             # Extract message text from job args (format: [user_id, chat_id, message_text])
             message_text = job.args[2] if len(job.args) > 2 else "No message"
-            
+            # Fetch user's configured timezone (falls back to UTC)
+            user_tz = None
+            try:
+                from ..models.users import User
+                user_obj = await self.session.get(User, user_id)
+                user_tz = getattr(user_obj, "user_timezone", None)
+            except Exception:
+                user_tz = None
+
+            scheduled_for_local = None
+            if isinstance(run_date, datetime):
+                try:
+                    if user_tz:
+                        from zoneinfo import ZoneInfo
+                        scheduled_for_local = run_date.astimezone(ZoneInfo(user_tz)).isoformat()
+                    else:
+                        scheduled_for_local = run_date_iso
+                except Exception:
+                    scheduled_for_local = run_date_iso
+
             reminders.append({
                 "job_id": job.id,
                 "message": message_text,
                 "scheduled_for": run_date_iso,
+                "scheduled_for_local": scheduled_for_local,
+                "timezone": user_tz or "UTC",
             })
         
         logger.info("Listed {} active reminders for user {}", len(reminders), user_id)

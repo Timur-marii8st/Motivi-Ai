@@ -43,6 +43,8 @@ def test_schedule_list_and_cancel_reminder(monkeypatch):
     result = asyncio.run(tool_executor._schedule_reminder(args, chat_id=42, user_id=123))
     assert result["success"] is True
     job_id = result["job_id"]
+    assert result.get("scheduled_for_utc") is not None
+    assert result.get("timezone") is not None
 
     # Job should be present in scheduler
     job = scheduler.get_job(job_id)
