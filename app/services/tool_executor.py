@@ -6,9 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.plan import Plan
 
 class ToolExecutor:
-    """
-    Executes tool calls from LLM by routing to MCP server or local services.
-    """
     def __init__(self, session: AsyncSession):
         self.session = session
 

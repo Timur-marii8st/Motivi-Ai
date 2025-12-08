@@ -16,11 +16,6 @@ services:
     command: >
       bash -lc "poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      - HTTP_PROXY=http://host.docker.internal:20171
-      - HTTPS_PROXY=http://host.docker.internal:20171
 
   db:
     image: pgvector/pgvector:pg16

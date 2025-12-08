@@ -28,7 +28,6 @@
 *   **🔒 Privacy & Security**:
     *   **End-to-End Database Encryption**: Sensitive user data (text, JSON) is encrypted at rest using Tink AEAD/Fernet.
     *   **GDPR Compliant**: Full data export and account deletion commands.
-*   **🛠 MCP Architecture**: Uses the **Model Context Protocol** to separate tool execution logic.
 
 ### 🛠 Tech Stack
 
@@ -127,7 +126,6 @@
 *   **🔒 Приватность и безопасность**:
     *   **Шифрование БД**: Чувствительные данные (текст, JSON) шифруются в базе данных (Tink AEAD/Fernet).
     *   **Соответствие GDPR**: Возможность полной выгрузки данных или удаления аккаунта.
-*   **🛠 Архитектура MCP**: Использование **Model Context Protocol** для разделения логики выполнения инструментов.
 
 ### 🛠 Технологический стек
 
