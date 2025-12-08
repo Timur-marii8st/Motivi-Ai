@@ -12,7 +12,6 @@ from ...llm.conversation_service import ConversationService
 from ...services.extractor_service import ExtractorService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...services.tool_executor import ToolExecutor
-from ...mcp_client.client import MCPClient
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
@@ -57,8 +56,7 @@ async def handle_chat(message: Message, session):
         await message.answer("Извини, мне сложно вспомнить нашу историю прямо сейчас. Давай попробуем чуть позже.")
         return
     
-    mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
-    tool_executor = ToolExecutor(session, mcp_client)
+    tool_executor = ToolExecutor(session)
 
     # Get current time in user's timezone (or UTC if not set)
     try:

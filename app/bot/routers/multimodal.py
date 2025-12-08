@@ -13,7 +13,6 @@ from ...services.episodic_memory_service import EpisodicMemoryService
 from ...services.core_memory_service import CoreMemoryService
 from ...services.working_memory_service import WorkingMemoryService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
-from ...mcp_client.client import MCPClient
 from ...services.tool_executor import ToolExecutor
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
@@ -61,8 +60,7 @@ async def handle_voice(message: Message, session):
             # Process as text
             memory_pack = await memory_orchestrator.assemble(session, user, transcript, top_k=5)
             
-            mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
-            tool_executor = ToolExecutor(session, mcp_client)
+            tool_executor = ToolExecutor(session)
             
             response, updated_history = await conversation_service.respond_with_tools(
                 transcript,

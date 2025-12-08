@@ -13,7 +13,6 @@ from ..services.core_memory_service import CoreMemoryService
 from ..services.working_memory_service import WorkingMemoryService
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 from ..llm.conversation_service import ConversationService
-from ..mcp_client.client import MCPClient
 from ..services.tool_executor import ToolExecutor
 
 class ProactiveFlows:
@@ -36,7 +35,6 @@ class ProactiveFlows:
         self.memory_orchestrator = MemoryOrchestrator(self.episodic_service)
         self.conversation_service = ConversationService()
         
-        self.mcp_client = MCPClient(settings.MCP_BASE_URL, settings.MCP_SECRET_TOKEN)
         self.tool_executor = ToolExecutor(session, self.mcp_client)
 
     async def morning_checkin(self, user: User):

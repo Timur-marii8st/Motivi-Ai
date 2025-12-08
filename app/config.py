@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     EPISODE_LIFETIME_DAYS: float = 2.5 * 30.0 / 30.0  # 2.5 months ~ 75 days (keep float for clarity)
     WORKING_MEMORY_LIFETIME_DAYS: int = 5
 
-    MCP_BASE_URL: str = "http://mcp_server:8001"
-    MCP_SECRET_TOKEN: str
-
     ENCRYPTION_KEY: str = Field(..., description="Must be 32 url-safe base64-encoded bytes")  # Must be 32 url-safe base64-encoded bytes
     DATA_ENCRYPTION_KEYSET_B64: str = Field(
         ...,

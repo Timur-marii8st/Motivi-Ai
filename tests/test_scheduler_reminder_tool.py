@@ -11,9 +11,8 @@ from pytz import utc
 def test_schedule_list_and_cancel_reminder(monkeypatch):
     """Test that ToolExecutor can schedule a reminder, list it, and cancel it."""
     fake_session = AsyncMock()
-    fake_mcp = MagicMock()
-
-    tool_executor = ToolExecutor(fake_session, fake_mcp)
+    
+    tool_executor = ToolExecutor(fake_session)
 
     # Do not start scheduler in test; we'll just use jobstore and scheduler utilities
 
@@ -73,8 +72,7 @@ def test_schedule_list_and_cancel_reminder(monkeypatch):
 
 def test_schedule_reminder_in_past_is_rejected():
     fake_session = AsyncMock()
-    fake_mcp = MagicMock()
-    tool_executor = ToolExecutor(fake_session, fake_mcp)
+    tool_executor = ToolExecutor(fake_session)
 
     # Do not start scheduler in test; we'll just use jobstore and scheduler utilities
 
@@ -91,8 +89,7 @@ def test_schedule_reminder_in_past_is_rejected():
 
 def test_schedule_with_explicit_timezone_works():
     fake_session = AsyncMock()
-    fake_mcp = MagicMock()
-    tool_executor = ToolExecutor(fake_session, fake_mcp)
+    tool_executor = ToolExecutor(fake_session)
 
     # Choose a timezone and schedule a naive datetime but provide timezone explicitly
     user_tz = 'Europe/London'  # UTC or UTC+0 for simplicity
@@ -120,8 +117,7 @@ def test_scheduler_job_runs_async(monkeypatch):
     # We'll run an async helper inside asyncio.run to properly start the scheduler
     async def run_test():
         fake_session = AsyncMock()
-        fake_mcp = MagicMock()
-        tool_executor = ToolExecutor(fake_session, fake_mcp)
+        tool_executor = ToolExecutor(fake_session)
 
         test_scheduler = AsyncIOScheduler(timezone=utc)
         test_scheduler.start()

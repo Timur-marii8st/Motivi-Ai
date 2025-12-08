@@ -1,20 +1,16 @@
 from __future__ import annotations
 from typing import Any, Dict
-from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..mcp_client.client import MCPClient
-from apscheduler.triggers.date import DateTrigger
 from ..models.plan import Plan
 
 class ToolExecutor:
     """
     Executes tool calls from LLM by routing to MCP server or local services.
     """
-    def __init__(self, session: AsyncSession, mcp_client: MCPClient):
+    def __init__(self, session: AsyncSession):
         self.session = session
-        self.mcp = mcp_client
 
     async def execute(self, tool_name: str, args: Dict[str, Any], chat_id: int, user_id: int) -> Dict[str, Any]:
         """
