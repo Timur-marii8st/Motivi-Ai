@@ -13,15 +13,18 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = Field(..., description="SQLAlchemy async URL, e.g., postgresql+asyncpg://...")
 
-    GEMINI_API_KEY: str
-    GEMINI_MODEL_ID: str
-    GEMINI_EMBEDDING_MODEL_ID: str
-
-    GEMMA_MODEL_ID: str
-    # Allow GEMMA_API_KEY to be unset; if not provided we'll fallback to GEMINI_API_KEY
-    GEMMA_API_KEY: str | None = None
+    # --- OpenRouter / OpenAI Config ---
+    OPENROUTER_API_KEY: str
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     
-        # Lifetime settings (in days)
+    # Models
+    LLM_MODEL_ID: str = "google/gemini-2.5-flash-lite-preview-09-2025"
+    EMBEDDING_MODEL_ID: str = "qwen/qwen3-embedding-8b"
+    EXTRACTOR_MODEL_ID: str = "google/gemma-3n-e4b-it"
+
+    # Site Info for OpenRouter Rankings
+    
+    # Lifetime settings (in days)
     EPISODE_LIFETIME_DAYS: float = 2.5 * 30.0 / 30.0  # 2.5 months ~ 75 days (keep float for clarity)
     WORKING_MEMORY_LIFETIME_DAYS: int = 5
 
@@ -71,7 +74,3 @@ class Settings(BaseSettings):
         return [int(x.strip()) for x in self.ADMIN_USER_IDS.split(",") if x.strip()]
 
 settings = Settings()
-if not settings.GEMMA_API_KEY:
-    # set fallback after instantiation so importing this module doesn't raise
-    # if GEMINI_API_KEY isn't defined at class creation time
-    settings.GEMMA_API_KEY = settings.GEMINI_API_KEY

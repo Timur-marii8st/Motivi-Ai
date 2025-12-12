@@ -79,7 +79,7 @@ class WorkingEntryEmbedding(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     working_entry_id: int = Field(unique=True, foreign_key="working_memory_entry.id", index=True)
 
-    embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
+    embedding: list = Field(sa_column=Column(Vector(4096), nullable=False))
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -95,7 +95,7 @@ class WorkingEmbedding(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     working_memory_id: int = Field(unique=True, foreign_key="working_memory.id", index=True)
 
-    embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
+    embedding: list = Field(sa_column=Column(Vector(4096), nullable=False))
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

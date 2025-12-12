@@ -16,7 +16,7 @@ pydantic-settings = "^2.5.2"
 sqlmodel = "^0.0.21"
 sqlalchemy = {version = "^2.0.34", extras = ["asyncio"]}
 asyncpg = "^0.29.0"
-google-genai = "^1.43.0"
+openai = "^1.0.0"
 httpx = "^0.28.1"
 loguru = "^0.7.2"
 orjson = "^3.10.7"

@@ -52,7 +52,7 @@ class CoreEmbedding(SQLModel, table=True):
     core_memory_id: int = Field(unique=True, foreign_key="core_memory.id", index=True)
 
     # Annotate as list[float] (embedding vector) so pydantic can validate the field.
-    embedding: list[float] = Field(sa_column=Column(Vector(1536), nullable=False))
+    embedding: list[float] = Field(sa_column=Column(Vector(4096), nullable=False))
 
     # Use timezone-aware UTC datetimes and a timezone-aware DB column for embeddings.
     created_at: datetime = Field(
@@ -88,7 +88,7 @@ class CoreFactEmbedding(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     core_fact_id: int = Field(unique=True, foreign_key="core_facts.id", index=True)
-    embedding: list[float] = Field(sa_column=Column(Vector(1536), nullable=False))
+    embedding: list[float] = Field(sa_column=Column(Vector(4096), nullable=False))
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

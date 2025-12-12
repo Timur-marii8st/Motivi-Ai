@@ -43,7 +43,7 @@ class EpisodeEmbedding(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     episode_id: int = Field(unique=True, foreign_key="episodes.id", index=True)
 
-    embedding: list = Field(sa_column=Column(Vector(1536), nullable=False))
+    embedding: list = Field(sa_column=Column(Vector(4096), nullable=False))
 
     created_at: datetime = Field(
         sa_column=Column("created_at", DateTime(timezone=True), nullable=False),

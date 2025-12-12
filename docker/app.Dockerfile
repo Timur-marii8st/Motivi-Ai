@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
-# Install system dependencies for multimedia
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
     libsm6 \
     libxext6 \
     && rm -rf /var/lib/apt/lists/*

@@ -1,6 +1,13 @@
 """
-Tool/function definitions for Gemini function calling.
+Tool/function definitions for OpenAI/OpenRouter function calling.
 """
+
+def _to_openai_tool(schema: dict) -> dict:
+    """Wraps a function schema in OpenAI's tool format."""
+    return {
+        "type": "function",
+        "function": schema
+    }
 
 TOOL_SCHEDULE_REMINDER = {
     "name": "schedule_reminder",
@@ -110,7 +117,7 @@ TOOL_CHECK_AVAILABILITY = {
     },
 }
 
-ALL_TOOLS = [
+RAW_TOOLS = [
     TOOL_SCHEDULE_REMINDER,
     TOOL_CANCEL_REMINDER,
     TOOL_LIST_REMINDERS,
@@ -120,3 +127,5 @@ ALL_TOOLS = [
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
 ]
+
+ALL_TOOLS = [_to_openai_tool(t) for t in RAW_TOOLS]

@@ -1,29 +1,41 @@
 from __future__ import annotations
-from google import genai
+import base64
 from loguru import logger
 from ..config import settings
-
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
+from ..llm.client import async_client
 
 async def analyze_photo(image_path: str, prompt: str = "Describe this image.") -> str:
     """
-    Analyze image using Gemini Vision.
+    Analyze image using OpenAI compatible API (Vision).
     """
     try:
+        # Encode image to base64
         with open(image_path, "rb") as img_file:
-            image_bytes = img_file.read()
-        
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL_ID, contents=[
-                genai.types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                genai.types.Part.from_text(text=prompt)   # Maybe need to be in 'user' role, and without "from_text", only prompt
-            ]
+            base64_image = base64.b64encode(img_file.read()).decode('utf-8')
+
+        response = await async_client.chat.completions.create(
+            model=settings.LLM_MODEL_ID, # Ensure the model ID supports vision (e.g. gemini-flash)
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=300
         )
         
-        result = response.text.strip()
-        logger.info("Image analysis: {}", result[:100])
+        result = response.choices[0].message.content.strip()
+        logger.info(f"Image analysis: {result[:100]}")
         return result
     
     except Exception as e:
-        logger.exception("Vision analysis failed: {}", e)
+        logger.exception(f"Vision analysis failed: {e}")
         return "I couldn't analyze this image."

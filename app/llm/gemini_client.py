@@ -1,11 +1,9 @@
 from __future__ import annotations
 from typing import Any, Dict
-from google import genai
 from loguru import logger
 from ..config import settings
+from .client import async_client
 import json
-
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 system_prompt = (
         "You are a structured data extractor. "
@@ -17,27 +15,28 @@ system_prompt = (
 
 async def parse_occupation_to_json(text: str) -> Dict[str, Any]:
     """
-    Uses Gemini to parse a free-text occupation description into structured JSON.
+    Uses OpenRouter/OpenAI to parse a free-text occupation description into structured JSON.
     """
-    # Prefer JSON response
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL_ID,
-            contents=genai.types.Content(role='user', parts=[genai.types.Part.from_text(text=text)]),
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
+        response = await async_client.chat.completions.create(
+            model=settings.LLM_MODEL_ID,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.2,
+            extra_body={
+                "response_format": {"type": "json_object"}
+            }
         )
-        if not response or not response.text:
-            raise ValueError("Empty response from Gemini")
-        response_text = response.candidates[0].content.parts[0].text
+        if not response or not response.choices:
+            raise ValueError("Empty response from API")
+        response_text = response.choices[0].message.content
         
         return json.loads(response_text)
     
     except Exception as e:
-        logger.exception("Gemini parse_occupation_to_json failed: {}", e)
+        logger.exception(f"parse_occupation_to_json failed: {e}")
         # Fallback minimal structure
         return {
             "title": None,

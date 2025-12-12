@@ -3,11 +3,12 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
+import json
 
 from ..models.users import User
 from ..services.working_memory_service import WorkingMemoryService
 from ..services.episodic_memory_service import EpisodicMemoryService
-from ..llm.gemini_client import client
+from ..llm.client import async_client
 from ..config import settings
 
 async def generate_weekly_summary_for_user(session: AsyncSession, user: User, episodic_service: EpisodicMemoryService):
@@ -31,12 +32,18 @@ async def generate_weekly_summary_for_user(session: AsyncSession, user: User, ep
     )
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL_ID,
-            contents=prompt,
-            generation_config={"response_mime_type": "application/json"},
+        response = await async_client.chat.completions.create(
+            model=settings.LLM_MODEL_ID,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            extra_body={
+                "response_format": {"type": "json_object"}
+            }
         )
-        data = response.json() if hasattr(response, 'json') else {}
+        response_text = response.choices[0].message.content
+        data = json.loads(response_text) if response_text else {}
         summary_text = data.get("summary", "Focused on daily tasks and routines.")
         goals = data.get("goals", [])
     except Exception as e:
