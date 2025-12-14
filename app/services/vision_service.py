@@ -14,7 +14,7 @@ async def analyze_photo(image_path: str, prompt: str = "Describe this image.") -
             base64_image = base64.b64encode(img_file.read()).decode('utf-8')
 
         response = await async_client.chat.completions.create(
-            model=settings.LLM_MODEL_ID, # Ensure the model ID supports vision (e.g. gemini-flash)
+            model=settings.AUDIO_IMAGE_MODEL_ID,
             messages=[
                 {
                     "role": "user",

@@ -38,7 +38,6 @@ async def handle_chat(message: Message, session):
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
     if not user.name:
-        # Перевод: Предложение начать регистрацию
         await message.answer("Давай сначала настроим твой профиль! Нажми /start, чтобы начать.")
         return
 

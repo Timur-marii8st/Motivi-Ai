@@ -18,9 +18,10 @@ class Settings(BaseSettings):
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     
     # Models
-    LLM_MODEL_ID: str = "google/gemini-2.5-flash-lite-preview-09-2025"
-    EMBEDDING_MODEL_ID: str = "qwen/qwen3-embedding-8b"
-    EXTRACTOR_MODEL_ID: str = "google/gemma-3n-e4b-it"
+    LLM_MODEL_ID: str
+    AUDIO_IMAGE_MODEL_ID: str
+    EMBEDDING_MODEL_ID: str
+    EXTRACTOR_MODEL_ID: str
 
     # Site Info for OpenRouter Rankings
     
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/oauth/google/callback"  # Update for production
+    GOOGLE_REDIRECT_URI: str
 
     # Admin
     ADMIN_USER_IDS: str = ""  # Comma-separated Telegram user IDs

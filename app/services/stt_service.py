@@ -1,40 +1,45 @@
 from __future__ import annotations
-from faster_whisper import WhisperModel
+import base64
 from loguru import logger
-import asyncio
-import functools
+from ..config import settings
+from ..llm.client import async_client
 
-# Load model once (use base or small for speed/accuracy balance)
-# For production, cache this or use GPU
-_model = None
-
-def get_whisper_model():
-    global _model
-    if _model is None:
-        _model = WhisperModel("base", device="cpu", compute_type="int8")
-        logger.info("Whisper model loaded")
-    return _model
-
-# Define the blocking operation
-def _run_transcribe(model, audio_path):
-    segments, info = model.transcribe(audio_path, beam_size=5)
-    return " ".join([seg.text for seg in segments])
 
 async def transcribe_voice(audio_path: str) -> str:
     """
-    Transcribe audio file using faster-whisper.
+    Transcribe audio file using OpenAI compatible API with AUDIO_IMAGE_MODEL_ID.
+    Sends audio as base64 encoded data similar to vision service.
     """
     try:
-        model = get_whisper_model()
-        loop = asyncio.get_running_loop()
-        
-        # Run blocking call in executor
-        transcript = await loop.run_in_executor(
-            None, # uses default executor
-            functools.partial(_run_transcribe, model, audio_path)
+        # Read and encode audio to base64
+        with open(audio_path, "rb") as audio_file:
+            base64_audio = base64.b64encode(audio_file.read()).decode('utf-8')
+
+        response = await async_client.chat.completions.create(
+            model=settings.AUDIO_IMAGE_MODEL_ID,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Transcribe the audio"
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": base64_audio,
+                                "format": "wav"
+                            }
+                        }
+                    ]
+                }
+            ]
         )
+        
+        transcript = response.choices[0].message.content.strip()
         logger.info("Transcribed audio: {}", transcript[:100])
-        return transcript.strip()
+        return transcript
     
     except Exception as e:
         logger.exception("Transcription failed: {}", e)

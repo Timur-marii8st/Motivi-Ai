@@ -1,5 +1,6 @@
 from __future__ import annotations
 import tempfile
+import subprocess
 from aiogram import Router, F
 from aiogram.types import Message, Voice, PhotoSize
 from loguru import logger
@@ -44,9 +45,26 @@ async def handle_voice(message: Message, session):
     file = await message.bot.get_file(voice.file_id)
     
     try:
-        with tempfile.NamedTemporaryFile(suffix=".ogg") as tmp:
-            await message.bot.download_file(file.file_path, tmp.name)
-            transcript = await transcribe_voice(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_tmp:
+            ogg_path = ogg_tmp.name
+            await message.bot.download_file(file.file_path, ogg_path)
+            
+            # Convert OGG to WAV for the API
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
+                wav_path = wav_tmp.name
+            
+            # Use ffmpeg to convert OGG to WAV
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-i", ogg_path, "-acodec", "pcm_s16le", "-ar", "16000", wav_path, "-y"],
+                    check=True,
+                    capture_output=True
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                logger.warning("ffmpeg conversion failed, trying to transcribe OGG directly: {}", e)
+                wav_path = ogg_path  # Fallback to OGG
+            
+            transcript = await transcribe_voice(wav_path)
             
             if not transcript:
                 await message.answer("Извини, Я поняла это. Попытайся снова?")
