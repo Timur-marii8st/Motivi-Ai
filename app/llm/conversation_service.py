@@ -56,7 +56,6 @@ class ConversationService:
         messages.append({"role": "user", "content": user_message})
 
         try:
-            # 2. First Call to LLM
             response = await self.client.chat.completions.create(
                 model=settings.LLM_MODEL_ID,
                 messages=messages,

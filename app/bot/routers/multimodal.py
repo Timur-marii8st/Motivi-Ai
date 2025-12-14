@@ -34,10 +34,10 @@ async def handle_voice(message: Message, session):
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
     
     if not user.name:
-        await message.answer("Please complete onboarding first: /start")
+        await message.answer("Пожалуйста, завершите онбординг: /start")
         return
     
-    await message.answer("🎤 Transcribing...")
+    await message.answer("🎤 Распознаю аудио...")
     
     # Download and process voice in a secure temporary file
     voice: Voice = message.voice
@@ -49,10 +49,10 @@ async def handle_voice(message: Message, session):
             transcript = await transcribe_voice(tmp.name)
             
             if not transcript:
-                await message.answer("Sorry, I couldn't understand that. Try again?")
+                await message.answer("Извини, Я поняла это. Попытайся снова?")
                 return
             
-            await message.answer(f"💬 You said: <i>{transcript}</i>")
+            await message.answer(f"💬 Ты сказал: <i>{transcript}</i>")
             
             # Retrieve conversation history
             history = await ConversationHistoryService.get_history(user.tg_chat_id)
@@ -78,7 +78,7 @@ async def handle_voice(message: Message, session):
     
     except Exception as e:
         logger.exception("Voice processing failed: {}", e)
-        await message.answer("Oops, something went wrong processing your voice message.")
+        await message.answer("Упс, при обработке голосового сообщения произошла ошибка. Попробуй позже.")
 
 
 @router.message(F.photo)
@@ -87,10 +87,10 @@ async def handle_photo(message: Message, session):
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
     
     if not user.name:
-        await message.answer("Please complete onboarding first: /start")
+        await message.answer("Пожалуйста, завершите онбординг: /start")
         return
     
-    await message.answer("📸 Analyzing...")
+    await message.answer("📸 Анализирую изображение...")
     
     # Get highest resolution photo
     photo: PhotoSize = message.photo[-1]
@@ -99,10 +99,10 @@ async def handle_photo(message: Message, session):
     try:
         with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
             await message.bot.download_file(file.file_path, tmp.name)
-            caption = message.caption or "What's in this image?"
+            caption = message.caption or "Что на этом изображении?"
             analysis = await analyze_photo(tmp.name, caption)
-            await message.answer(f"🖼 <b>Analysis:</b>\n{analysis}")
+            await message.answer(f"🖼 <b>Анализ:</b>\n{analysis}")
     
     except Exception as e:
         logger.exception("Photo processing failed: {}", e)
-        await message.answer("Couldn't analyze the photo. Try again?")
+        await message.answer("Не удалось проанализировать фото. Попробуй ещё раз.")

@@ -22,10 +22,10 @@ async def list_habits_cmd(message: Message, session):
     habits = await HabitService.list_habits(session, user.id, active_only=True)
     
     if not habits:
-        await message.answer("You don't have any habits yet. Use /add_habit to create one!")
+        await message.answer("У тебя ещё нет привычек. Нажми /add_habit, чтобы создать!")
         return
     
-    text = "<b>📋 Your Active Habits:</b>\n\n"
+    text = "<b>📋 Твои активные привычки:</b>\n\n"
     for h in habits:
         stats = await HabitService.get_habit_stats(session, h.id)
         text += (
@@ -40,24 +40,30 @@ async def list_habits_cmd(message: Message, session):
 @router.message(F.text.startswith("/add_habit"))
 async def add_habit_cmd(message: Message, state: FSMContext):
     """Start habit creation flow."""
-    await message.answer("What's the name of your new habit?")
+    await message.answer("Как зовут твою новую привычку?")
     await state.set_state("HabitCreation:name")
 
 @router.message(HabitCreation.name, F.text)
 async def habit_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
-    await message.answer("Great! How often? Reply: daily or weekly")
+    await message.answer("Отлично! Как часто? Ежедневно или еженедельно")
     await state.set_state("HabitCreation:cadence")
 
 @router.message(HabitCreation.cadence, F.text)
 async def habit_cadence(message: Message, state: FSMContext):
     cadence = message.text.strip().lower()
-    if cadence not in ["daily", "weekly"]:
-        await message.answer("Please choose 'daily' or 'weekly'.")
+    if cadence not in ["ежедневно", "еженедельно", "daily", "weekly"]:
+        await message.answer("Пожалуйста, выбери 'ежедневно' или 'еженедельно'.")
         return
     
+    # Normalize to English for storage
+    if cadence == "ежедневно" or cadence == "daily":
+        cadence = "daily"
+    elif cadence == "еженедельно" or cadence == "weekly":
+        cadence = "weekly"
+    
     await state.update_data(cadence=cadence)
-    await message.answer("Do you want a daily reminder? Reply with time (HH:MM) or 'no'.")
+    await message.answer("Хочешь буду ежедневно напоминать? Ответь временем (ЧЧ:ММ) или 'нет'.")
     await state.set_state("HabitCreation:reminder")
 
 @router.message(HabitCreation.reminder, F.text)
@@ -65,11 +71,11 @@ async def habit_reminder(message: Message, state: FSMContext, session):
     text = message.text.strip().lower()
     reminder_time = None
     
-    if text != "no":
+    if text != "no" or text != "нет":
         from ...utils.timeparse import parse_hhmm
         reminder_time = parse_hhmm(text)
         if not reminder_time:
-            await message.answer("Invalid time format. Use HH:MM or 'no'.")
+            await message.answer("Неверный формат времени. Ответь ЧЧ:ММ или 'нет'.")
             return
     
     data = await state.get_data()
@@ -88,7 +94,7 @@ async def habit_reminder(message: Message, state: FSMContext, session):
     if reminder_time:
         await JobManager.schedule_habit_reminders(session, user.id)
     
-    await message.answer(f"✅ Habit <b>{habit.name}</b> created! Use /log_habit {habit.id} to log it.")
+    await message.answer(f"✅ Привычка <b>{habit.name}</b> создана! Нажми /log_habit {habit.id}, чтобы зафиксировать её.")
     await state.clear()
 
 @router.message(F.text.regexp(r"^/log_habit\s+(\d+)"))
@@ -97,7 +103,7 @@ async def log_habit_cmd(message: Message, session):
     import re
     match = re.match(r"^/log_habit\s+(\d+)", message.text)
     if not match:
-        await message.answer("Usage: /log_habit <habit_id>")
+        await message.answer("Использование: /log_habit <id_поведения>")
         return
     
     habit_id = int(match.group(1))
@@ -109,13 +115,13 @@ async def log_habit_cmd(message: Message, session):
         
         habit = await session.get(Habit, habit_id)
         await message.answer(
-            f"✅ Logged <b>{habit.name}</b>!\n"
-            f"Current streak: {habit.current_streak} 🔥"
+            f"✅ Зафиксировано <b>{habit.name}</b>!\n"
+            f"Текущий стрик: {habit.current_streak} 🔥"
         )
     except ValueError as e:
         await message.answer(f"❌ {html.escape(str(e))}")
     except Exception as e:
         logger.exception("Failed to log habit: {}", e)
-        await message.answer("Failed to log habit. Please try again.")
+        await message.answer("Не удалось зафиксировать привычку. Попробуй ещё раз.")
 
 from ...models.habit import Habit

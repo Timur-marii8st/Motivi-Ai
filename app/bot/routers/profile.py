@@ -23,33 +23,33 @@ async def profile_cmd(message: Message, session):
     pc = await ProfileCompletenessService.get_or_create(session, user.id)
     
     text = (
-        f"<b>👤 Your Profile</b>\n\n"
-        f"<b>Basic Info:</b>\n"
-    f"• Name: {html.escape(user.name) if user.name else 'Not set'}\n"
-        f"• Age: {user.age or 'Not set'}\n"
-        f"• Timezone: {user.user_timezone or 'Not set'}\n"
-        f"• Wake time: {user.wake_time or 'Not set'}\n"
-        f"• Bedtime: {user.bed_time or 'Not set'}\n\n"
-        f"<b>Occupation:</b>\n"
-    f"{html.escape(user.occupation_json.get('title', 'Not set')) if user.occupation_json else 'Not set'}\n\n"
-        f"<b>Profile Completeness:</b> {pc.score * 100:.0f}%\n"
-        f"<b>Total Interactions:</b> {pc.total_interactions}\n"
+        f"<b>👤 Профиль</b>\n\n"
+        f"<b>Основная информация:</b>\n"
+    f"• Имя: {html.escape(user.name) if user.name else 'Не указано'}\n"
+        f"• Возраст: {user.age or 'Не указано'}\n"
+        f"• Часовой пояс: {user.user_timezone or 'Не указано'}\n"
+        f"• Время подъёма: {user.wake_time or 'Не указано'}\n"
+        f"• Время отхода ко сну: {user.bed_time or 'Не указано'}\n\n"
+        f"<b>Деятельность:</b>\n"
+    f"{html.escape(user.occupation_json.get('title', 'Не указано')) if user.occupation_json else 'Не указано'}\n\n"
+        f"<b>Заполненность профиля:</b> {pc.score * 100:.0f}%\n"
+        f"<b>Всего взаимодействий:</b> {pc.total_interactions}\n"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit Name", callback_data="profile_edit_name")],
-        [InlineKeyboardButton(text="✏️ Edit Age", callback_data="profile_edit_age")],
-        [InlineKeyboardButton(text="✏️ Edit Timezone", callback_data="profile_edit_timezone")],
-        [InlineKeyboardButton(text="✏️ Edit Wake/Bed Times", callback_data="profile_edit_times")],
-        [InlineKeyboardButton(text="🎯 Edit Goals", callback_data="profile_edit_goals")],
-        [InlineKeyboardButton(text="🗑 Delete Account", callback_data="profile_delete_account")],
+        [InlineKeyboardButton(text="✏️ Изменить имя", callback_data="profile_edit_name")],
+        [InlineKeyboardButton(text="✏️ Изменить возраст", callback_data="profile_edit_age")],
+        [InlineKeyboardButton(text="✏️ Изменить часовой пояс", callback_data="profile_edit_timezone")],
+        [InlineKeyboardButton(text="✏️ Время подъёма/сна", callback_data="profile_edit_times")],
+        [InlineKeyboardButton(text="🎯 Цели", callback_data="profile_edit_goals")],
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data="profile_delete_account")],
     ])
     
     await message.answer(text, reply_markup=keyboard)
 
 @router.callback_query(F.data == "profile_edit_name")
 async def edit_name_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("What's your new name?")
+    await callback.message.answer("Какое у тебя новое имя?")
     await state.set_state("ProfileEdit:name")
     await callback.answer()
 
@@ -60,12 +60,12 @@ async def save_name(message: Message, state: FSMContext, session):
     await ProfileCompletenessService.update_score(session, user.id)
     await session.commit()
     
-    await message.answer(f"✅ Name updated to <b>{html.escape(user.name)}</b>")
+    await message.answer(f"✅ Имя обновлено на <b>{html.escape(user.name)}</b>")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_age")
 async def edit_age_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("What's your age?")
+    await callback.message.answer("Сколько тебе лет?")
     await state.set_state("ProfileEdit:age")
     await callback.answer()
 
@@ -73,7 +73,7 @@ async def edit_age_callback(callback: CallbackQuery, state: FSMContext):
 async def save_age(message: Message, state: FSMContext, session):
     age = clamp_age(message.text.strip())
     if not age:
-        await message.answer("Please enter a valid age (5-120).")
+        await message.answer("Пожалуйста, введи корректный возраст (5-120).")
         return
     
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
@@ -81,12 +81,12 @@ async def save_age(message: Message, state: FSMContext, session):
     await ProfileCompletenessService.update_score(session, user.id)
     await session.commit()
     
-    await message.answer(f"✅ Age updated to <b>{age}</b>")
+    await message.answer(f"✅ Возраст обновлён: <b>{age}</b>")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_timezone")
 async def edit_timezone_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Enter your IANA timezone (e.g., Europe/Berlin, America/New_York):")
+    await callback.message.answer("Укажи свой IANA часовой пояс (например, Europe/Berlin, America/New_York):")
     await state.set_state("ProfileEdit:timezone")
     await callback.answer()
 
@@ -94,7 +94,7 @@ async def edit_timezone_callback(callback: CallbackQuery, state: FSMContext):
 async def save_timezone(message: Message, state: FSMContext, session):
     tz = message.text.strip()
     if not is_valid_timezone(tz):
-        await message.answer("Invalid timezone. Try again with IANA format (e.g., America/New_York).")
+        await message.answer("Неверный часовой пояс. Попробуй формат IANA, например America/New_York.")
         return
     
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
@@ -109,12 +109,12 @@ async def save_timezone(message: Message, state: FSMContext, session):
     settings = await SettingsService.get_or_create(session, user.id)
     JobManager.schedule_user_jobs(user, settings)
     
-    await message.answer(f"✅ Timezone updated to <b>{html.escape(tz)}</b>. Your scheduled jobs have been rescheduled.")
+    await message.answer(f"✅ Часовой пояс обновлён на <b>{html.escape(tz)}</b>. Расписанные задания перенастроены.")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_times")
 async def edit_times_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Enter your wake time (HH:MM, 24h format):")
+    await callback.message.answer("Укажи время подъёма (ЧЧ:ММ, 24ч):")
     await state.set_state("ProfileEdit:wake_time")
     await callback.answer()
 
@@ -122,18 +122,18 @@ async def edit_times_callback(callback: CallbackQuery, state: FSMContext):
 async def save_wake_time(message: Message, state: FSMContext):
     wake = parse_hhmm(message.text.strip())
     if not wake:
-        await message.answer("Invalid format. Use HH:MM (e.g., 07:30).")
+        await message.answer("Неверный формат. Используй ЧЧ:ММ, например 07:30.")
         return
     
     await state.update_data(wake_time=wake.isoformat())
-    await message.answer("Now enter your bedtime (HH:MM):")
+    await message.answer("Теперь укажи время отхода ко сну (ЧЧ:ММ):")
     await state.set_state("ProfileEdit:bed_time")
 
 @router.message(ProfileEdit.bed_time, F.text)
 async def save_bed_time(message: Message, state: FSMContext, session):
     bed = parse_hhmm(message.text.strip())
     if not bed:
-        await message.answer("Invalid format. Use HH:MM (e.g., 23:00).")
+        await message.answer("Неверный формат. Используй ЧЧ:ММ, например 23:00.")
         return
     
     data = await state.get_data()
@@ -152,12 +152,12 @@ async def save_bed_time(message: Message, state: FSMContext, session):
     settings = await SettingsService.get_or_create(session, user.id)
     JobManager.schedule_user_jobs(user, settings)
     
-    await message.answer(f"✅ Times updated: Wake <b>{html.escape(str(wake))}</b>, Bed <b>{html.escape(str(bed))}</b>. Jobs rescheduled.")
+    await message.answer(f"✅ Время обновлено: Подъём <b>{html.escape(str(wake))}</b>, Сон <b>{html.escape(str(bed))}</b>. Задания перенастроены.")
     await state.clear()
 
 @router.callback_query(F.data == "profile_edit_goals")
 async def edit_goals_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Describe your goals (e.g., 'Get fit, learn Python, read more'):")
+    await callback.message.answer("Опиши свои цели (например: 'Накачаться, выучить Python, читать больше'):")
     await state.set_state("ProfileEdit:goals")
     await callback.answer()
 
@@ -171,19 +171,19 @@ async def delete_account_callback(callback: CallbackQuery):
     ])
     
     await callback.message.answer(
-        "⚠️ <b>WARNING:</b> This will permanently delete all your data:\n"
-        "• Profile and settings\n"
-        "• All memories and episodes\n"
-        "• Tasks and habits\n"
-        "• OAuth tokens\n\n"
-        "This action cannot be undone. Are you sure?",
+        "⚠️ <b>ВНИМАНИЕ:</b> Это удалит все твои данные безвозвратно:\n"
+        "• Профиль и настройки\n"
+        "• Задачи и привычки\n"
+        "• OAuth токены\n\n"
+        "И все что я помню о тебе и о том, что мы пережили вместе 😢\n"
+        "Это действие нельзя будет отменить. Ты уверен(а)?",
         reply_markup=keyboard
     )
     await callback.answer()
 
 @router.callback_query(F.data == "profile_delete_cancel")
 async def delete_cancel(callback: CallbackQuery):
-    await callback.message.answer("❌ Account deletion cancelled.")
+    await callback.message.answer("❌ Удаление аккаунта отменено.")
     await callback.answer()
 
 @router.callback_query(F.data == "profile_delete_confirm")
@@ -196,7 +196,7 @@ async def delete_confirm(callback: CallbackQuery, session):
     await session.commit()
     
     await callback.message.answer(
-        "✅ Your account and all data have been permanently deleted.\n\n"
-        "Thank you for using Motivi_AI. You can always start fresh with /start."
+        "✅ Твой аккаунт и все данные были безвозвратно удалены.\n\n"
+        "Спасибо, что использовал(а) Motivi_AI. Ты всегда можешь начать заново с /start."
     )
     await callback.answer()

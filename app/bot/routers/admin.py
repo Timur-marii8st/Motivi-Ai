@@ -42,10 +42,10 @@ async def admin_stats(message: Message, session):
     active_count = active_result.scalar_one()
     
     text = (
-        f"<b>📊 Motivi_AI Statistics</b>\n\n"
-        f"Total Users: {user_count}\n"
-        f"Active (7d): {active_count}\n"
-        f"Total Episodes: {episode_count}\n"
+        f"<b>📋 Статистика Motivi_AI</b>\n\n"
+        f"Всего пользователей: {user_count}\n"
+        f"Активных (7 дней): {active_count}\n"
+        f"Всего эпизодов: {episode_count}\n"
     )
     
     await message.answer(text)
@@ -59,7 +59,7 @@ async def admin_broadcast(message: Message, session, bot: Bot):
     
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Usage: /admin_broadcast <message>")
+        await message.answer("Использование: /admin_broadcast <сообщение>")
         return
     
     broadcast_msg = parts[1]
@@ -72,11 +72,11 @@ async def admin_broadcast(message: Message, session, bot: Bot):
     
     for user in users:
         try:
-            await bot.send_message(user.tg_chat_id, f"📢 <b>Announcement:</b>\n\n{broadcast_msg}")
+            await bot.send_message(user.tg_chat_id, f"📢 <b>Объявление:</b>\n\n{broadcast_msg}")
             sent += 1
         except Exception as e:
             logger.error("Broadcast failed for user {}: {}", user.id, e)
             failed += 1
     
-    await message.answer(f"✅ Broadcast sent to {sent} users. Failed: {failed}")
+    await message.answer(f"✅ Объявление отправлено {sent} пользователям. Ошибок: {failed}")
     logger.warning("Admin {} broadcast to {} users", message.from_user.id, sent)

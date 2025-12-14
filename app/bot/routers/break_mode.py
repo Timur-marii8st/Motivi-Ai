@@ -28,7 +28,7 @@ async def break_cmd(message: Message, session):
         session.add(settings)
         await session.commit()
         
-        await message.answer("🔔 Break mode deactivated. I'll resume proactive messages!")
+        await message.answer("🔔 Режим перерыва отключен. Я возобновлю проактивные сообщения!")
         return
     
     # Parse duration
@@ -45,7 +45,7 @@ async def break_cmd(message: Message, session):
         hours = int(duration_str[:-1])
         delta = timedelta(hours=hours)
     else:
-        await message.answer("Usage: /break [1d|3d|1w|off]\nExamples: /break 1d, /break 1w, /break off")
+        await message.answer("Использование: /break [1d|3d|1w|off]\nПримеры: /break 1d, /break 1w, /break off")
         return
     
     until = datetime.now(timezone.utc) + delta
@@ -57,8 +57,8 @@ async def break_cmd(message: Message, session):
     await session.commit()
     
     await message.answer(
-        f"🔕 Break mode activated until {until.strftime('%Y-%m-%d %H:%M UTC')}.\n"
-        f"I won't send proactive messages until then. Use /break off to resume anytime."
+        f"🔕 Режим перерыва активен до {until.strftime('%Y-%m-%d %H:%M UTC')}.\n"
+        f"Я не буду отправлять проактивные сообщения до этого времени. Используй /break off, чтобы возобновить когда угодно."
     )
     logger.info("User {} activated break mode until {}", user.id, until)
 
@@ -81,7 +81,7 @@ async def export_data_cmd(message: Message, session):
     
     # Send file
     doc = FSInputFile(temp_path, filename=f"motivi_data_{user.id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json")
-    await message.answer_document(doc, caption="📦 Your complete Motivi_AI data export (GDPR compliant)")
+    await message.answer_document(doc, caption="📦 Полный экспорт твоих данных Motivi_AI (соответствует GDPR)")
     
     import os
     os.unlink(temp_path)
