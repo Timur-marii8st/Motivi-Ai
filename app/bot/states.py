@@ -2,7 +2,6 @@ from aiogram.fsm.state import StatesGroup, State
 
 class Onboarding(StatesGroup):
     name = State()
-    age = State()
     timezone = State()
     wake_time = State()
     bed_time = State()

@@ -85,7 +85,7 @@
 ### 🤖 Usage
 
 1.  Open your bot in Telegram.
-2.  Send `/start` to begin the onboarding process (set name, age, timezone, wake/bed times).
+2.  Send `/start` to begin the onboarding process (set name, city/timezone, wake/bed times). You can send `/skip` at any step to skip it and fill it later.
 3.  **Commands:**
     *   `/profile` - View and edit your profile.
     *   `/habits` - Manage your habits.
