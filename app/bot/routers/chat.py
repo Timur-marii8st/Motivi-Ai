@@ -43,6 +43,13 @@ async def handle_chat(message: Message, session):
 
     user_text = message.text.strip()
 
+    # Send an immediate "thinking" message and keep reference so we can delete it later
+    thinking_message = None
+    try:
+        thinking_message = await message.answer("Дай мне подумать...")
+    except Exception as e:
+        logger.warning("Failed to send thinking message for user {}: {}", user.id, e)
+
     # Retrieve conversation history
     history = await ConversationHistoryService.get_history(user.tg_chat_id)
 
@@ -52,6 +59,12 @@ async def handle_chat(message: Message, session):
     except Exception as e:
         logger.error("Memory assembly failed for user {}: {}", user.id, e)
         # Перевод: Сообщение об ошибке памяти
+        # Ensure thinking message is removed before returning
+        if thinking_message:
+            try:
+                await thinking_message.delete()
+            except Exception as del_e:
+                logger.warning("Failed to delete thinking message for user {}: {}", user.id, del_e)
         await message.answer("Извини, мне сложно вспомнить нашу историю прямо сейчас. Давай попробуем чуть позже.")
         return
     
@@ -78,6 +91,13 @@ async def handle_chat(message: Message, session):
         session,
         conversation_history=history,
     )
+
+    # Remove the thinking message before sending the LLM's reply
+    if thinking_message:
+        try:
+            await thinking_message.delete()
+        except Exception as e:
+            logger.warning("Failed to delete thinking message for user {}: {}", user.id, e)
 
     await message.answer(reply)
 
