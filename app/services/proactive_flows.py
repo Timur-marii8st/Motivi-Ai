@@ -32,10 +32,10 @@ class ProactiveFlows:
         self.episodic_service = EpisodicMemoryService(self.gemini_embeddings)
         self.core_service = CoreMemoryService(self.gemini_embeddings)
         self.working_service = WorkingMemoryService(self.gemini_embeddings)
-        self.memory_orchestrator = MemoryOrchestrator(self.episodic_service)
+        self.memory_orchestrator = MemoryOrchestrator(self.episodic_service, self.core_service, self.working_service)
         self.conversation_service = ConversationService()
         
-        self.tool_executor = ToolExecutor(session, self.mcp_client)
+        self.tool_executor = ToolExecutor(session)
 
     async def morning_checkin(self, user: User):
         """
