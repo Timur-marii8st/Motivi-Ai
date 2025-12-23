@@ -60,6 +60,12 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
+def include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table" and name == "apscheduler_jobs":
+        return False
+    return True
+
+
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode using an AsyncEngine."""
 
