@@ -19,6 +19,8 @@ WELCOME = (
     "Давай настроим твой профиль. Как тебя зовут?     (Если хочешь пропустить этот и любой другой вопрос от меня, отправь 'пропустить' или 'skip'"
 )
 
+SKIP_TOKENS = {'/skip', 'skip', 'пропустить'}
+
 # === Handlers ===
 @router.message(F.text == "/start")
 async def cmd_start(message: Message, state: FSMContext, session):
@@ -38,10 +40,6 @@ async def get_name(message: Message, state: FSMContext):
     await state.update_data(name=txt)
     await message.answer("Приятно познакомиться! В каком городе ты живёшь? Просто название города (например: Moscow, Berlin или Новосибирск)")
     await state.set_state(Onboarding.timezone)
-
-
-
-SKIP_TOKENS = {'/skip', 'skip', 'пропустить'}
 
 @router.message(Onboarding.timezone, F.text)
 async def get_timezone(message: Message, state: FSMContext):
@@ -118,12 +116,8 @@ async def get_bed(message: Message, state: FSMContext):
     )
     await state.set_state(Onboarding.occupation)
 
-@router.message(StateFilter(Onboarding), F.text)
+@router.message(StateFilter(Onboarding), F.text.lower().in_(SKIP_TOKENS))
 async def handle_skip_and_forward(message: Message, state: FSMContext, session):
-    # Generic skip command support when in Onboarding
-    txt = message.text.strip()
-    if txt.lower() not in SKIP_TOKENS:
-        return
 
     st = (await state.get_state()).split(':')[-1]
     if st == 'name':
