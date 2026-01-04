@@ -23,7 +23,7 @@ working_memory_service = WorkingMemoryService(embeddings=_emb_client)
 
 class ExtractorService:
     """
-    Service to extract important information from user messages using OpenRouter (Gemma).
+    Service to extract important information from user messages using OpenRouter.
     """
 
     def __init__(self):
@@ -38,7 +38,7 @@ class ExtractorService:
 
     async def find_write_important_info(self, user_id: int, session: AsyncSession, text: str) -> bool:
         """
-        Uses OpenRouter/Gemma to determine if the text contains important information and should be remembered.
+        Uses OpenRouter model to determine if the text contains important information and should be remembered.
         Returns True if important info is found and written to memory, else False.
         """
 
@@ -69,21 +69,20 @@ class ExtractorService:
             if facts:
                 try:
                     for item in facts:
-                        if item.importance == "Core":
+                        if item.importance.lower() == "core":
                             await core_memory_service.store_core(session=session, user_id=user_id, fact_text=item.fact)
                             logger.info(f"Important fact extracted: {item.fact} (Importance: {item.importance})")
                         
-                        if item.importance == "Episode":
+                        if item.importance.lower() == "episode":
                             await episodic_memory_service.store_episode(session=session, user_id=user_id, fact_text=item.fact)
                             logger.info(f"Episodic memory fact extracted: {item.fact} (Importance: {item.importance})")
 
-                        if item.importance == "Working":
+                        if item.importance.lower() == "working":
                             await working_memory_service.store_working(session=session, user_id=user_id, fact_text=item.fact)
                             logger.info(f"Working memory fact extracted: {item.fact} (Importance: {item.importance})")
                     return True
                 except Exception as e:
                     logger.error(f"Failed to store extracted facts: {e}")
-                    # Rollback the session to avoid PendingRollbackError
                     try:
                         await session.rollback()
                     except Exception as rollback_error:

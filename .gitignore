@@ -5,6 +5,8 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+*.lock
+.lock
 
 .vscode/
 .idea/

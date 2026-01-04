@@ -3,20 +3,18 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 def get_time_in_zone(tz_name: Optional[str]) -> str:
-    """
-    Получает текущее время в указанной временной зоне в формате ISO.
-    Если tz_name равен None, возвращает время в UTC.
-    """
     now_utc = datetime.now(timezone.utc)
     
-    if not tz_name:
-        return now_utc.isoformat()
+    # Определяем целевую таймзону
+    target_zone = timezone.utc  # По умолчанию UTC
+    if tz_name:
+        try:
+            target_zone = ZoneInfo(tz_name)
+        except Exception:
+            pass # Если ошибка, остаемся в UTC
+
+    # Переводим время в нужную зону
+    now_in_zone = now_utc.astimezone(target_zone)
     
-    try:
-        zone = ZoneInfo(tz_name)
-    except Exception as e:
-        # Если timezone невалидный, возвращаем UTC время
-        return now_utc.isoformat()
-    
-    now_in_zone = now_utc.astimezone(zone).isoformat()
-    return now_in_zone
+    # Форматируем строку: Год-Месяц-День T Часы:Минуты
+    return now_in_zone.strftime('%Y-%m-%dT%H:%M')
