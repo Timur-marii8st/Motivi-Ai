@@ -114,7 +114,6 @@ class ConversationService:
                 messages.append({"role": "assistant", "content": final_text})
 
             final_text = final_text.strip() if final_text else "Done! ✅"
-            logger.info(f"Motivi responded: {final_text[:100]}")
 
             # 5. Side Effects (Profile scoring)
             if "?" in final_text:
