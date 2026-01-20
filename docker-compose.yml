@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   app:
     build:
@@ -8,14 +7,16 @@ services:
     depends_on:
       - db
       - redis
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - .:/app
       - shared_files:/tmp/motivi_files
     command: >
       bash -lc "poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: unless-stopped
+    networks:
+      - motivi-network
 
   db:
     image: pgvector/pgvector:pg16
@@ -28,6 +29,8 @@ services:
     volumes:
       - dbdata:/var/lib/postgresql/data
     restart: unless-stopped
+    networks:
+      - motivi-network
 
   redis:
     image: redis:7-alpine
@@ -36,8 +39,29 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - motivi-network
+
+  nginx-proxy:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    volumes:
+      - ./npm_data:/data
+      - ./npm_letsencrypt:/etc/letsencrypt
+    networks:
+      - motivi-network
 
 volumes:
   dbdata:
   shared_files:
   redis_data:
+  npm_data:
+  npm_letsencrypt:
+
+networks:
+  motivi-network:
+    driver: bridge
