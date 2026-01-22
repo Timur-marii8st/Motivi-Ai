@@ -61,8 +61,9 @@ class ConversationHistoryService:
                 content = message.get("content")
                 role = message.get("role")
                 
-                # Only save text interactions to short-term history, skip tool logic
-                if content and role in ["user", "assistant", "system"]:
+                # Only save text interactions to short-term history, skip tool logic and system messages
+                # System messages are regenerated each turn with fresh context
+                if content and role in ["user", "assistant"]:
                     simple_message = {'role': role, 'content': content}
                     serializable_history.append(json.dumps(simple_message))
 

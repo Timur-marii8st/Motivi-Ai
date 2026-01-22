@@ -36,9 +36,11 @@ class ConversationService:
         tool_executor: ToolExecutor,
         session: AsyncSession,
         conversation_history: Optional[List[dict]] = None,
+        max_iterations: int = 5,
     ) -> Tuple[str, List[dict]]:
         """
         Generate a response with potential tool calls using the OpenAI compatible API.
+        Implements ReAct pattern allowing multiple rounds of tool calling.
         Returns final text and updated history (as list of dicts).
         """
         context_dict = memory_pack.to_context_dict()
@@ -46,38 +48,75 @@ class ConversationService:
         system_instruction = f"{self.persona_prompt}\n\n{context_block}"
         
         # 1. Prepare Messages
+        # Always start with fresh system message (contains current memory context)
         messages = [{"role": "system", "content": system_instruction}]
         
-        # Add history (ensure format is correct)
+        # Add conversation history (user/assistant exchanges only, no old system messages)
         if conversation_history:
-            messages.extend(conversation_history)
+            for msg in conversation_history:
+                # Skip system messages from history since we have a fresh one
+                if msg.get("role") != "system":
+                    messages.append(msg)
         
         # Add current user message
         messages.append({"role": "user", "content": user_message})
 
         try:
-            response = await self.client.chat.completions.create(
-                model=settings.LLM_MODEL_ID,
-                messages=messages,
-                tools=ALL_TOOLS,
-                tool_choice="auto", 
-                temperature=0.7,
-                max_tokens=4000
-            )
-
-            response_msg = response.choices[0].message
-            tool_calls = response_msg.tool_calls
-
-            # 3. Handle Tool Calls
-            if tool_calls:
-                # Add the assistant's message with tool_calls to history
-                messages.append(response_msg)
+            # ReAct Loop: Allow multiple rounds of tool calling
+            iteration = 0
+            final_text = None
+            
+            while iteration < max_iterations:
+                iteration += 1
+                logger.debug(f"ReAct iteration {iteration}/{max_iterations}")
                 
+                response = await self.client.chat.completions.create(
+                    model=settings.LLM_MODEL_ID,
+                    messages=messages,
+                    tools=ALL_TOOLS,
+                    tool_choice="auto", 
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+
+                response_msg = response.choices[0].message
+                tool_calls = response_msg.tool_calls
+
+                # If no tool calls, we have the final response
+                if not tool_calls:
+                    final_text = response_msg.content
+                    messages.append({"role": "assistant", "content": final_text})
+                    break
+                
+                # Handle tool calls
+                logger.info(f"Processing {len(tool_calls)} tool call(s) in iteration {iteration}")
+                
+                # Add the assistant's message with tool_calls to history
+                # Convert to dict for storage
+                assistant_msg_dict = {
+                    "role": "assistant",
+                    "content": response_msg.content,
+                    "tool_calls": []
+                }
+                
+                for tc in tool_calls:
+                    assistant_msg_dict["tool_calls"].append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    })
+                
+                messages.append(assistant_msg_dict)
+                
+                # Execute all tool calls
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
                     
-                    logger.info(f"Tool call requested: {function_name}")
+                    logger.info(f"Executing tool: {function_name} with args: {function_args}")
 
                     # Execute tool
                     tool_result = await tool_executor.execute(
@@ -94,28 +133,18 @@ class ConversationService:
                         "name": function_name,
                         "content": json.dumps({"result": tool_result}, ensure_ascii=False)
                     })
-
-                # 4. Second Call to LLM (with tool results)
-                second_response = await self.client.chat.completions.create(
-                    model=settings.LLM_MODEL_ID,
-                    messages=messages,
-                    # We usually don't need tools in the follow-up, but keeping them allows multi-step
-                    tools=ALL_TOOLS, 
-                    temperature=0.7
-                )
-                final_text = second_response.choices[0].message.content
                 
-                # Update history with the final assistant response
+                # Continue loop - LLM will decide if it needs more tools or can respond
+            
+            # If we exhausted iterations without a final response
+            if final_text is None:
+                logger.warning(f"Reached max iterations ({max_iterations}) without final response")
+                final_text = "Я выполнила все необходимые действия. Чем ещё могу помочь?"
                 messages.append({"role": "assistant", "content": final_text})
 
-            else:
-                # No tools called
-                final_text = response_msg.content
-                messages.append({"role": "assistant", "content": final_text})
+            final_text = final_text.strip() if final_text else "Готово! Чем ещё могу помочь?"
 
-            final_text = final_text.strip() if final_text else "Done! ✅"
-
-            # 5. Side Effects (Profile scoring)
+            # Side Effects (Profile scoring)
             if "?" in final_text:
                 await ProfileCompletenessService.increment_question_count(session, memory_pack.user.id)
             await ProfileCompletenessService.increment_interaction_count(session, memory_pack.user.id)
@@ -125,17 +154,24 @@ class ConversationService:
                 await ProfileCompletenessService.decay_question_frequency(session, memory_pack.user.id)
 
             # Return plain text and the conversation history (excluding system prompt for storage)
-            # Filter out the first system message for storage
-            history_to_save = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
-            # Also, if we have tool objects (ChatCompletionMessage), convert to dict
-            clean_history = []
-            for m in history_to_save:
+            # The system message is regenerated each turn with fresh context, so don't save it
+            # We only save user and assistant text exchanges for context
+            history_to_save = []
+            for m in messages:
+                # Convert ChatCompletionMessage objects to dict if needed
                 if hasattr(m, "model_dump"):
-                    clean_history.append(m.model_dump())
-                else:
-                    clean_history.append(m)
+                    m = m.model_dump()
+                
+                # Only save user and assistant messages with text content
+                # Skip: system messages (regenerated each turn), tool messages (internal mechanics)
+                if isinstance(m, dict):
+                    role = m.get("role")
+                    content = m.get("content")
+                    
+                    if role in ["user", "assistant"] and content:
+                        history_to_save.append({"role": role, "content": content})
 
-            return final_text, clean_history
+            return final_text, history_to_save
 
         except Exception as e:
             logger.exception(f"Conversation error: {e}")
