@@ -25,6 +25,13 @@ class JobManager:
 
         tz = ZoneInfo(user.user_timezone)
         
+        # Remove all existing jobs for this user first to avoid conflicts
+        for prefix in ["morning", "evening", "weekly", "monthly"]:
+            job_id = f"{prefix}_{user.id}"
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+                logger.debug("Removed existing job {} before rescheduling", job_id)
+        
         # Morning check-in
         job_id = f"morning_{user.id}"
         if settings.enable_morning_checkin and user.wake_time:
@@ -38,10 +45,7 @@ class JobManager:
             )
             logger.info("Scheduled morning check-in for user {} at {}", user.id, wake)
         else:
-            # Remove job if disabled or wake_time not set
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-                logger.info("Removed morning check-in job for user {} (disabled or wake_time not set)", user.id)
+            logger.info("Morning check-in not scheduled for user {} (disabled or wake_time not set)", user.id)
 
         # Evening wrap-up (1 hour before bed)
         job_id = f"evening_{user.id}"
@@ -62,10 +66,7 @@ class JobManager:
             logger.info("Scheduled evening wrap-up for user {} at {}:{:02d} (1 hour before bed at {}:{:02d})", 
                        user.id, evening_hour, bed.minute, bed.hour, bed.minute)
         else:
-            # Remove job if disabled or bed_time not set
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-                logger.info("Removed evening wrap-up job for user {} (disabled or bed_time not set)", user.id)
+            logger.info("Evening wrap-up not scheduled for user {} (disabled or bed_time not set)", user.id)
 
         # Weekly plan (Sundays at 18:00 local time)
         job_id = f"weekly_{user.id}"
@@ -79,10 +80,7 @@ class JobManager:
             )
             logger.info("Scheduled weekly plan for user {}", user.id)
         else:
-            # Remove job if disabled
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-                logger.info("Removed weekly plan job for user {} (disabled)", user.id)
+            logger.info("Weekly plan not scheduled for user {} (disabled)", user.id)
 
         # Monthly plan (1st of month at 18:00 local time)
         job_id = f"monthly_{user.id}"
@@ -96,10 +94,7 @@ class JobManager:
             )
             logger.info("Scheduled monthly plan for user {}", user.id)
         else:
-            # Remove job if disabled
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-                logger.info("Removed monthly plan job for user {} (disabled)", user.id)
+            logger.info("Monthly plan not scheduled for user {} (disabled)", user.id)
 
     @staticmethod
     async def remove_user_jobs(user_id: int):

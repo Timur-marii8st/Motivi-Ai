@@ -14,6 +14,8 @@ from ..services.working_memory_service import WorkingMemoryService
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 from ..llm.conversation_service import ConversationService
 from ..services.tool_executor import ToolExecutor
+from ..services.conversation_history_service import ConversationHistoryService
+from ..services.extractor_service import ExtractorService
 
 class ProactiveFlows:
     """
@@ -34,6 +36,7 @@ class ProactiveFlows:
         self.working_service = WorkingMemoryService(self.gemini_embeddings)
         self.memory_orchestrator = MemoryOrchestrator(self.episodic_service, self.core_service, self.working_service)
         self.conversation_service = ConversationService()
+        self.extractor_service = ExtractorService()
         
         self.tool_executor = ToolExecutor(session)
 
@@ -49,14 +52,28 @@ class ProactiveFlows:
                 "Check my recent episodes, suggest 3 top-priority tasks, and motivate me."
             )
             
+            # Load conversation history
+            history = await ConversationHistoryService.get_history(user.tg_chat_id)
+            
             memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
             
-            response, _ = await self.conversation_service.respond_with_tools(
-                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            response, updated_history = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session, conversation_history=history
             )
+            
+            # Save updated history
+            await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
             
             message = f"{greeting}\n\n{response}"
             await self.bot.send_message(user.tg_chat_id, message)
+            
+            # Extract important info from the conversation
+            try:
+                info_text = f"User message: {prompt}\nAI Assistant message: {response}"
+                await self.extractor_service.find_write_important_info(user.id, self.session, info_text)
+                logger.info("Extracted important info from morning check-in for user {}", user.id)
+            except Exception as e:
+                logger.exception("Failed to extract info from morning check-in for user {}: {}", user.id, e)
             
             logger.info("Morning check-in sent to user {}", user.id)
         except Exception as e:
@@ -75,14 +92,28 @@ class ProactiveFlows:
                 "Ask me what went well, what I completed, and encourage me for tomorrow."
             )
             
+            # Load conversation history
+            history = await ConversationHistoryService.get_history(user.tg_chat_id)
+            
             memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=5)
             
-            response, _ = await self.conversation_service.respond_with_tools(
-                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            response, updated_history = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session, conversation_history=history
             )
+            
+            # Save updated history
+            await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
             
             message = f"{greeting}\n\n{response}"
             await self.bot.send_message(user.tg_chat_id, message)
+            
+            # Extract important info from the conversation
+            try:
+                info_text = f"User message: {prompt}\nAI Assistant message: {response}"
+                await self.extractor_service.find_write_important_info(user.id, self.session, info_text)
+                logger.info("Extracted important info from evening wrap-up for user {}", user.id)
+            except Exception as e:
+                logger.exception("Failed to extract info from evening wrap-up for user {}: {}", user.id, e)
             
             logger.info("Evening wrap-up sent to user {}", user.id)
         except Exception as e:
@@ -104,14 +135,28 @@ class ProactiveFlows:
                 "Create a structured document with sections: Goals, Daily Breakdown, Habits to Focus On. "
             )
             
+            # Load conversation history
+            history = await ConversationHistoryService.get_history(user.tg_chat_id)
+            
             memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=10)
             
-            response, _ = await self.conversation_service.respond_with_tools(
-                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            response, updated_history = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session, conversation_history=history
             )
+            
+            # Save updated history
+            await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
             
             # Tool should have handled document creation; send confirmation
             await self.bot.send_message(user.tg_chat_id, f"📅 Your weekly plan is ready!\n\n{response}")
+            
+            # Extract important info from the conversation
+            try:
+                info_text = f"User message: {prompt}\nAI Assistant message: {response}"
+                await self.extractor_service.find_write_important_info(user.id, self.session, info_text)
+                logger.info("Extracted important info from weekly plan for user {}", user.id)
+            except Exception as e:
+                logger.exception("Failed to extract info from weekly plan for user {}: {}", user.id, e)
             
             logger.info("Weekly plan generated for user {}", user.id)
         except Exception as e:
@@ -132,13 +177,27 @@ class ProactiveFlows:
                 "Structure: Overview, Weekly Themes, Key Milestones, Habits. "
             )
             
+            # Load conversation history
+            history = await ConversationHistoryService.get_history(user.tg_chat_id)
+            
             memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=15)
             
-            response, _ = await self.conversation_service.respond_with_tools(
-                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session
+            response, updated_history = await self.conversation_service.respond_with_tools(
+                prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session, conversation_history=history
             )
             
+            # Save updated history
+            await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
+            
             await self.bot.send_message(user.tg_chat_id, f"📆 Your monthly plan is ready!\n\n{response}")
+            
+            # Extract important info from the conversation
+            try:
+                info_text = f"User message: {prompt}\nAI Assistant message: {response}"
+                await self.extractor_service.find_write_important_info(user.id, self.session, info_text)
+                logger.info("Extracted important info from monthly plan for user {}", user.id)
+            except Exception as e:
+                logger.exception("Failed to extract info from monthly plan for user {}: {}", user.id, e)
             
             logger.info("Monthly plan generated for user {}", user.id)
         except Exception as e:

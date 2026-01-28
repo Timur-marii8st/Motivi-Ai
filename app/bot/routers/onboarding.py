@@ -13,6 +13,18 @@ from ..states import Onboarding
 
 router = Router(name="onboarding")
 
+@router.message(F.text == "/cancel")
+async def cancel_onboarding(message: Message, state: FSMContext):
+    """Cancel onboarding process."""
+    current_state = await state.get_state()
+    if current_state is None or not current_state.startswith("Onboarding"):
+        return  # Not in onboarding, let other handlers deal with it
+    
+    await state.clear()
+    await message.answer(
+        "❌ Онбординг отменен. Ты можешь начать заново с /start или просто написать мне."
+    )
+
 # === Start message ===
 WELCOME = (
     "Привет, я Мотиви! 💫 Я помогу тебе организовать день и поддержу мотивацию.\n"

@@ -94,14 +94,16 @@ class MemoryOrchestrator:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
         """
-        # Retrieve similar CoreFact entries (per-fact retrieval)
+        # Retrieve similar CoreFact entries (per-fact retrieval) - only relevant facts
         similar_core_facts = await self.core_service.retrieve_similar(
-            session, user.id, query_text=query_text
+            session, user.id, query_text=query_text, top_k=top_k
         )
         # Ensure CoreMemory row exists
         core = await self.core_service.get_or_create(session, user.id)
-        # List all core facts for the user (for full context)
-        core_facts = await self.core_service.list_facts_for_user(session, user.id)
+        
+        # Use only relevant core facts instead of loading all facts
+        # This prevents context window bloat as the user accumulates more facts over time
+        core_facts = similar_core_facts
 
         working_results = await self.working_service.retrieve_similar(
             session, user.id, query_text=query_text
@@ -123,11 +125,12 @@ class MemoryOrchestrator:
             
         # RAG retrieval
         episodes = await self.episodic_service.retrieve_similar(
-            session, user.id, query_text=query_text
+            session, user.id, query_text=query_text, top_k=top_k
         )
 
         logger.debug(
-            "Assembled memory pack for user {}: {} episodes retrieved", user.id, len(episodes)
+            "Assembled memory pack for user {}: {} core facts, {} episodes retrieved", 
+            user.id, len(core_facts), len(episodes)
         )
 
         return MemoryPack(

@@ -17,6 +17,7 @@ from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...services.tool_executor import ToolExecutor
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
+from ...services.extractor_service import ExtractorService
 
 router = Router(name="multimodal")
 
@@ -27,6 +28,7 @@ core_service = CoreMemoryService(gemini_embeddings)
 working_service = WorkingMemoryService(gemini_embeddings)
 memory_orchestrator = MemoryOrchestrator(episodic_service, core_service, working_service)
 conversation_service = ConversationService()
+extractor_service = ExtractorService()
 
 
 @router.message(F.voice)
@@ -93,6 +95,14 @@ async def handle_voice(message: Message, session):
             
             # Save the updated history
             await ConversationHistoryService.save_history(user.tg_chat_id, updated_history)
+            
+            # Extract important info from voice conversation
+            try:
+                info_text = f"User message: {transcript}\nAI Assistant message: {response}"
+                await extractor_service.find_write_important_info(user.id, session, info_text)
+                logger.info("Extracted important info from voice message for user {}", user.id)
+            except Exception as e:
+                logger.exception("Failed to extract info from voice message for user {}: {}", user.id, e)
     
     except Exception as e:
         logger.exception("Voice processing failed: {}", e)

@@ -15,6 +15,16 @@ import html
 
 router = Router(name="habits")
 
+@router.message(F.text == "/cancel")
+async def cancel_habit_creation(message: Message, state: FSMContext):
+    """Cancel habit creation process."""
+    current_state = await state.get_state()
+    if current_state is None or not current_state.startswith("HabitCreation"):
+        return  # Not in habit creation, let other handlers deal with it
+    
+    await state.clear()
+    await message.answer("❌ Создание привычки отменено.")
+
 @router.message(F.text == "/habits")
 async def list_habits_cmd(message: Message, session):
     """List all active habits."""
@@ -40,14 +50,15 @@ async def list_habits_cmd(message: Message, session):
 @router.message(F.text.startswith("/add_habit"))
 async def add_habit_cmd(message: Message, state: FSMContext):
     """Start habit creation flow."""
+    await state.clear()  # Clear any previous state
     await message.answer("Как зовут твою новую привычку?")
-    await state.set_state("HabitCreation:name")
+    await state.set_state(HabitCreation.name)
 
 @router.message(HabitCreation.name, F.text)
 async def habit_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
     await message.answer("Отлично! Как часто? Ежедневно или еженедельно")
-    await state.set_state("HabitCreation:cadence")
+    await state.set_state(HabitCreation.cadence)
 
 @router.message(HabitCreation.cadence, F.text)
 async def habit_cadence(message: Message, state: FSMContext):
@@ -64,14 +75,14 @@ async def habit_cadence(message: Message, state: FSMContext):
     
     await state.update_data(cadence=cadence)
     await message.answer("Хочешь буду ежедневно напоминать? Ответь временем (ЧЧ:ММ) или 'нет'.")
-    await state.set_state("HabitCreation:reminder")
+    await state.set_state(HabitCreation.reminder)
 
 @router.message(HabitCreation.reminder, F.text)
 async def habit_reminder(message: Message, state: FSMContext, session):
     text = message.text.strip().lower()
     reminder_time = None
     
-    if text != "no" or text != "нет":
+    if text not in ["no", "нет"]:
         from ...utils.timeparse import parse_hhmm
         reminder_time = parse_hhmm(text)
         if not reminder_time:
@@ -94,7 +105,7 @@ async def habit_reminder(message: Message, state: FSMContext, session):
     if reminder_time:
         await JobManager.schedule_habit_reminders(session, user.id)
     
-    await message.answer(f"✅ Привычка <b>{habit.name}</b> создана! Нажми /log_habit {habit.id}, чтобы зафиксировать её.")
+    await message.answer(f"✅ Привычка <b>{html.escape(habit.name)}</b> создана! Нажми /log_habit {habit.id}, чтобы зафиксировать её.")
     await state.clear()
 
 @router.message(F.text.regexp(r"^/log_habit\s+(\d+)"))
