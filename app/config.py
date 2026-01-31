@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # Fact cleanup
     # similarity threshold for deduplication (cosine similarity). Value in [0,1].
     FACT_CLEANUP_SIMILARITY_THRESHOLD: float = 0.95
+    
+    # Vector dimensions for embeddings (must match EMBEDDING_MODEL_ID output)
+    VECTOR_DIM: int = 4096  # Qwen3-embedding-8b outputs 4096-dimensional vectors
 
     # Subscription & Limits
     TRIAL_DAYS: int = 7

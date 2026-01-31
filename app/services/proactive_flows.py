@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from aiogram import Bot
@@ -125,7 +125,7 @@ class ProactiveFlows:
         Generate weekly plan, send and pin.
         """
         try:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             week_start = now.strftime("%b %d")
             week_end = (now + timedelta(days=7)).strftime("%b %d")
             
@@ -168,7 +168,7 @@ class ProactiveFlows:
         Generate monthly plan.
         """
         try:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             month = now.strftime("%B %Y")
             
             prompt = (

@@ -297,7 +297,8 @@ class ToolExecutor:
 
         except Exception as e:
             logger.exception("Error creating plan for user {}: {}", user_id, e)
-            await self.session.rollback()
+            # Don't rollback - let the caller/middleware handle transaction fate
+            # The session is shared with the handler
             return {"success": False, "error": str(e)}
 
     async def _check_plan(self, user_id: int) -> Dict:
@@ -406,6 +407,7 @@ class ToolExecutor:
 
         except Exception as e:
             logger.exception("Error editing plan for user {}: {}", user_id, e)
-            await self.session.rollback()
+            # Don't rollback - let the caller/middleware handle transaction fate
+            # The session is shared with the handler
             return {"success": False, "error": str(e)}
 

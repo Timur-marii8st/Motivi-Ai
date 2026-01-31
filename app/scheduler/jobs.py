@@ -210,45 +210,89 @@ async def habit_reminder_job(habit_id: int):
         await session.close()
         
 async def cleanup_expired_memories_job():
-    """Cleanup episodes older than EPISODE_LIFETIME_DAYS and working embeddings for stale working memory."""
+    """
+    Cleanup episodes older than EPISODE_LIFETIME_DAYS and clear stale working memory.
+    Uses batch processing to avoid memory issues with large datasets.
+    """
     logger.info("Running cleanup_expired_memories_job")
     session = AsyncSessionLocal()
+    BATCH_SIZE = 1000  # Process in batches to avoid OOM
+    
     try:
         # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
         life_days = float(settings.EPISODE_LIFETIME_DAYS)
         cutoff = datetime.now(timezone.utc) - timedelta(days=life_days)
 
-        # find expired episode ids
-        result = await session.execute(
-            select(Episode.id).where(Episode.created_at < cutoff)
-        )
-        expired_ids = [r for (r,) in result.all()]
+        total_deleted = 0
+        while True:
+            # Fetch batch of expired episode IDs
+            result = await session.execute(
+                select(Episode.id)
+                .where(Episode.created_at < cutoff)
+                .limit(BATCH_SIZE)
+            )
+            expired_ids = [r for (r,) in result.all()]
 
-        if expired_ids:
-            # delete embeddings
-            await session.execute(delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids)))
-            # delete episodes
-            await session.execute(delete(Episode).where(Episode.id.in_(expired_ids)))
+            if not expired_ids:
+                break  # No more expired episodes
+
+            # Delete embeddings and episodes for this batch
+            await session.execute(
+                delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids))
+            )
+            await session.execute(
+                delete(Episode).where(Episode.id.in_(expired_ids))
+            )
             await session.commit()
-            logger.info("Deleted {} expired episodes and their embeddings", len(expired_ids))
+            
+            total_deleted += len(expired_ids)
+            logger.info("Deleted batch of {} expired episodes (total: {})", len(expired_ids), total_deleted)
+            
+            # If we got fewer than BATCH_SIZE, we're done
+            if len(expired_ids) < BATCH_SIZE:
+                break
+
+        if total_deleted > 0:
+            logger.info("Cleanup complete: deleted {} expired episodes total", total_deleted)
         else:
             logger.info("No expired episodes to delete")
 
-        # Working memory: remove WorkingEmbedding rows for working memories with decay_date passed
+        # Working memory: Clear text for stale working memories instead of deleting the record
+        # This preserves the user's working memory structure while resetting the content
         result = await session.execute(
-            select(WorkingMemory.id).where(WorkingMemory.decay_date != None, WorkingMemory.decay_date <= datetime.now(timezone.utc).date())
-        )
-        stale_wm_ids = [r for (r,) in result.all()]
-
-        if stale_wm_ids:
-            await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
-            await session.execute(
-                delete(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
+            select(WorkingMemory.id, WorkingMemory.user_id)
+            .where(
+                WorkingMemory.decay_date != None, 
+                WorkingMemory.decay_date <= datetime.now(timezone.utc).date()
             )
+        )
+        stale_wm = result.all()
+
+        if stale_wm:
+            stale_wm_ids = [wm_id for wm_id, _ in stale_wm]
+            
+            # Delete embeddings
+            await session.execute(
+                delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids))
+            )
+            
+            # Clear working memory text instead of deleting the record
+            # This allows the user to maintain their working memory structure
+            from sqlalchemy import update
+            await session.execute(
+                update(WorkingMemory)
+                .where(WorkingMemory.id.in_(stale_wm_ids))
+                .values(
+                    working_memory_text=None,
+                    decay_date=None
+                )
+            )
+            
             await session.commit()
-            logger.info("Deleted embeddings and working memory for {} stale working memories", len(stale_wm_ids))
+            logger.info("Cleared {} stale working memories (preserved records)", len(stale_wm_ids))
         else:
             logger.info("No stale working memories found")
+            
     except Exception as e:
         logger.exception("Error during cleanup_expired_memories_job: {}", e)
         await session.rollback()

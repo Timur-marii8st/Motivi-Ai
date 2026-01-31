@@ -13,6 +13,7 @@ from ..models.settings import UserSettings
 from ..models.habit import Habit, HabitLog
 from ..models.oauth_token import OAuthToken
 from ..models.profile_completeness import ProfileCompleteness
+from ..models.plan import Plan
 from ..scheduler.job_manager import JobManager
 
 class AccountService:
@@ -136,6 +137,7 @@ class AccountService:
         await session.execute(delete(Habit).where(Habit.user_id == user_id))
         await session.execute(delete(OAuthToken).where(OAuthToken.user_id == user_id))
         await session.execute(delete(UserSettings).where(UserSettings.user_id == user_id))
+        await session.execute(delete(Plan).where(Plan.user_id == user_id))
         await session.execute(delete(WorkingMemory).where(WorkingMemory.user_id == user_id))
         await session.execute(delete(CoreMemory).where(CoreMemory.user_id == user_id))
         await session.execute(delete(ProfileCompleteness).where(ProfileCompleteness.user_id == user_id))

@@ -22,6 +22,7 @@ class OAuthStateService:
     async def create_and_store_state(cls, user_id: int, chat_id: int) -> str:
         """
         Generates a secure, unguessable state token and stores user info against it in Redis.
+        Uses user_id in key to prevent collisions and simplify debugging.
         """
         redis = cls._get_redis_client()
         state_token = secrets.token_urlsafe(32)
@@ -32,7 +33,7 @@ class OAuthStateService:
         }
         
         await redis.set(
-            f"oauth_state:{state_token}",
+            f"oauth_state:{user_id}:{state_token}",
             json.dumps(payload),
             ex=cls.STATE_EXPIRATION_SECONDS
         )
@@ -43,14 +44,27 @@ class OAuthStateService:
         """
         Verifies the state token exists in Redis, retrieves the payload, and deletes the token.
         Returns the user info payload if valid, otherwise None.
+        Note: Token format is now oauth_state:{user_id}:{token}, but we need to scan for it
+        since we don't know user_id at verification time.
         """
         redis = cls._get_redis_client()
-        key = f"oauth_state:{state_token}"
         
+        # Scan for keys matching the pattern with this token
+        # This is slightly less efficient but maintains security and prevents collisions
+        pattern = f"oauth_state:*:{state_token}"
+        keys = []
+        async for key in redis.scan_iter(match=pattern, count=10):
+            keys.append(key)
+        
+        if not keys:
+            return None  # State is invalid or expired
+        
+        # Should only be one match
+        key = keys[0]
         payload_str = await redis.get(key)
         
         if not payload_str:
-            return None # State is invalid or expired
+            return None
             
         # Consume the token to prevent reuse
         await redis.delete(key)

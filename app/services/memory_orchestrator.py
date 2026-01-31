@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
 import json
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from loguru import logger
@@ -65,7 +66,7 @@ class MemoryPack:
                     }
                     for w in sorted(self.working_history, key=lambda x: x.history_order or 999)
                 ],
-                "stale": self.working.decay_date and self.working.decay_date < datetime.now().date(),
+                "stale": self.working.decay_date and self.working.decay_date < datetime.now(timezone.utc).date(),
             },
             "relevant_episodes": [
                 {
@@ -75,8 +76,6 @@ class MemoryPack:
                 for ep in self.episodes
             ],
         }
-
-from datetime import datetime
 
 class MemoryOrchestrator:
     """

@@ -21,6 +21,7 @@ from app.models.episode import Episode
 from app.models.habit import Habit, HabitLog
 from app.models.users import User
 from app.models.settings import UserSettings
+from app.models.plan import Plan
 from app.db import AsyncSessionLocal
 
 
@@ -105,6 +106,7 @@ async def main() -> None:
         await _backfill_table(AsyncSessionLocal, HabitLog, ["note"])
         await _backfill_table(AsyncSessionLocal, User, ["name", "occupation_json"])
         await _backfill_table(AsyncSessionLocal, UserSettings, ["summary_preferences_json"])
+        await _backfill_table(AsyncSessionLocal, Plan, ["content"])
     except Exception as e:
         logger.exception("Fatal error during backfill: {}", e)
 

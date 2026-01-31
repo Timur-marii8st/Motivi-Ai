@@ -50,33 +50,31 @@ class ConversationHistoryService:
         """
         Saves the latest conversation history to Redis, trimming to the specified limit.
         Stores only simple text-based exchanges (role + content).
+        Optimized to append new messages instead of rewriting entire history.
         """
         redis = cls._get_redis_client()
         key = f"conversation_history:{chat_id}"
 
-        serializable_history = []
+        # Extract only new messages (user and assistant text only)
+        new_messages = []
         for message in history:
-            # message should already be a dict from ConversationService
             if isinstance(message, dict):
                 content = message.get("content")
                 role = message.get("role")
                 
-                # Only save text interactions to short-term history, skip tool logic and system messages
-                # System messages are regenerated each turn with fresh context
+                # Only save text interactions, skip tool logic and system messages
                 if content and role in ["user", "assistant"]:
-                    simple_message = {'role': role, 'content': content}
-                    serializable_history.append(json.dumps(simple_message))
+                    new_messages.append(json.dumps({'role': role, 'content': content}))
 
-        if not serializable_history:
+        if not new_messages:
             return
 
-        # Use a pipeline for atomic and efficient operations
+        # Use pipeline for atomic operations
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.delete(key)  # Start fresh to ensure consistency
-            # RPUSH adds items to the end of the list, preserving chronological order.
-            pipe.rpush(key, *serializable_history)
-            # LTRIM trims the list, keeping only the last N elements. This enforces the history limit.
+            # Append new messages to the list
+            pipe.rpush(key, *new_messages)
+            # Trim to keep only the last N messages
             pipe.ltrim(key, -cls.HISTORY_LIMIT, -1)
-            # Set an expiration on the key to automatically clean up old conversations.
+            # Refresh expiration
             pipe.expire(key, cls.HISTORY_EXPIRATION_SECONDS)
             await pipe.execute()

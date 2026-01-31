@@ -83,10 +83,8 @@ class ExtractorService:
                     return True
                 except Exception as e:
                     logger.error(f"Failed to store extracted facts: {e}")
-                    try:
-                        await session.rollback()
-                    except Exception as rollback_error:
-                        logger.error(f"Failed to rollback session: {rollback_error}")
+                    # Don't rollback here - let the middleware handle transaction fate
+                    # The session is shared with the handler and middleware
                     return False
         except Exception as e:
             logger.error(f"Extraction failed: {e}")
