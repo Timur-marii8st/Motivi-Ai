@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Any
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select, and_, or_, exists
 from sqlalchemy.orm import aliased
@@ -14,10 +15,24 @@ from ..config import settings
 
 class FactCleanupService:
     @staticmethod
-    async def clear_duplicate_facts(session: AsyncSession, user_id: int, similarity_threshold: float | None = None) -> int:
+    async def clear_duplicate_facts(
+        session: AsyncSession, 
+        user_id: int, 
+        similarity_threshold: float | None = None,
+        recent_hours: int = 24
+    ) -> int:
         """
         Identify and remove duplicate facts for a given user using in-DB vector comparison.
         Uses pgvector operators to avoid CPU blocking.
+        
+        Optimized to check only recent episodes (last 24h by default) against the full database
+        to avoid O(N²) complexity on large datasets.
+        
+        Args:
+            session: Database session
+            user_id: User ID
+            similarity_threshold: Cosine similarity threshold (default from config)
+            recent_hours: Only check episodes created in last N hours for self-deduplication
         """
 
         # Determine threshold (distance = 1 - similarity)
@@ -83,9 +98,11 @@ class FactCleanupService:
             res_work = await session.execute(stmt_work)
             to_delete_ids.update(res_work.scalars().all())
 
-        # 5. Self-Deduplication (Older vs Newer)
-        # Find Old_Episode where exists New_Episode such that they are similar
-        # and New is "better" (newer OR same time but higher ID).
+        # 5. Self-Deduplication (OPTIMIZED: Only check recent episodes)
+        # Only check episodes created in the last N hours against all episodes
+        # This reduces complexity from O(N²) to O(N*M) where M << N
+        
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=recent_hours)
         
         OldEp = aliased(Episode)
         OldEmb = aliased(EpisodeEmbedding)
@@ -98,6 +115,8 @@ class FactCleanupService:
             .where(
                 and_(
                     OldEp.user_id == user_id,
+                    # OPTIMIZATION: Only check recent episodes as candidates for deletion
+                    OldEp.created_at >= recent_cutoff,
                     exists(
                         select(NewEp.id)
                         .join(NewEmb, NewEp.id == NewEmb.episode_id)
@@ -127,6 +146,7 @@ class FactCleanupService:
 
         # 6. Bulk Delete
         if not to_delete_ids:
+            logger.debug("No duplicate episodes found for user {}", user_id)
             return 0
 
         # Delete in chunks if massive (safe approach)
@@ -140,7 +160,7 @@ class FactCleanupService:
             await session.flush()
             
             count = len(ids_list)
-            logger.info("Deleted total {} duplicate episode(s) for user {}", count, user_id)
+            logger.info("Deleted {} duplicate episode(s) for user {} (checked last {}h)", count, user_id, recent_hours)
             return count
             
         except Exception as e:

@@ -298,3 +298,101 @@ async def cleanup_expired_memories_job():
         await session.rollback()
     finally:
         await session.close()
+
+
+async def archive_raw_conversations_job():
+    """
+    Archive raw conversation history from Redis to Episodes.
+    This prevents data loss when conversations exceed the Redis history limit
+    or when ExtractorService misses important information.
+    
+    Runs daily to create "Daily Chat Log" episodes for each active user.
+    """
+    logger.info("Running archive_raw_conversations_job")
+    session = AsyncSessionLocal()
+    
+    try:
+        from ..services.conversation_history_service import ConversationHistoryService
+        from ..services.episodic_memory_service import EpisodicMemoryService
+        from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+        
+        # Get all users who have conversation history in Redis
+        redis = ConversationHistoryService._get_redis_client()
+        
+        # Scan for all conversation history keys
+        archived_count = 0
+        async for key in redis.scan_iter(match="conversation_history:*", count=100):
+            try:
+                # Extract chat_id from key
+                chat_id = int(key.split(":")[-1])
+                
+                # Get user by chat_id
+                result = await session.execute(
+                    select(User).where(User.tg_chat_id == chat_id)
+                )
+                user = result.scalar_one_or_none()
+                
+                if not user:
+                    logger.warning("No user found for chat_id {}", chat_id)
+                    continue
+                
+                # Get conversation history
+                history = await ConversationHistoryService.get_history(chat_id)
+                
+                if not history or len(history) < 3:  # Skip if too short
+                    continue
+                
+                # Create summary of the conversation
+                conversation_text = "\n".join([
+                    f"{msg['role'].upper()}: {msg['content']}"
+                    for msg in history
+                    if msg.get('content')
+                ])
+                
+                # Check if we already archived today
+                today = datetime.now(timezone.utc).date()
+                result = await session.execute(
+                    select(Episode)
+                    .where(
+                        Episode.user_id == user.id,
+                        Episode.created_at >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+                        Episode.text.like("%Daily Chat Archive%")
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                
+                if existing:
+                    logger.debug("Already archived conversation for user {} today", user.id)
+                    continue
+                
+                # Create episode with archived conversation
+                archive_text = (
+                    f"Daily Chat Archive ({today.isoformat()}):\n\n"
+                    f"{conversation_text}\n\n"
+                    f"[This is an automatic archive of raw conversation history]"
+                )
+                
+                # Store as episode
+                embeddings = GeminiEmbeddings()
+                episodic_service = EpisodicMemoryService(embeddings)
+                await episodic_service.store_episode(
+                    session=session,
+                    user_id=user.id,
+                    fact_text=archive_text
+                )
+                
+                archived_count += 1
+                logger.info("Archived conversation for user {} (chat_id: {})", user.id, chat_id)
+                
+            except Exception as e:
+                logger.exception("Error archiving conversation for key {}: {}", key, e)
+                continue
+        
+        await session.commit()
+        logger.info("Archived {} conversations total", archived_count)
+        
+    except Exception as e:
+        logger.exception("Error during archive_raw_conversations_job: {}", e)
+        await session.rollback()
+    finally:
+        await session.close()

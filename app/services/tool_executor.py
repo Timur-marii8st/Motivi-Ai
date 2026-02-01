@@ -274,7 +274,9 @@ class ToolExecutor:
                 expires_at=expires_at,
             )
             self.session.add(plan)
-            await self.session.commit()
+            # Don't commit here - let middleware handle transaction
+            # This ensures atomicity: if Telegram send fails, plan won't be saved
+            await self.session.flush()  # Flush to get plan.id without committing
 
             # Send plan to user via Telegram
             bot = Bot(
@@ -380,7 +382,8 @@ class ToolExecutor:
                 logger.info("Extended expiry for plan {} to {}", plan_id, plan.expires_at)
 
             self.session.add(plan)
-            await self.session.commit()
+            # Don't commit here - let middleware handle transaction
+            await self.session.flush()  # Flush to persist changes without committing
 
             # Send updated plan to user via Telegram
             bot = Bot(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional, List, Tuple, Any
 import json
+import re
 from pathlib import Path
 from loguru import logger
 
@@ -27,6 +28,11 @@ class ConversationService:
         if PERSONA_PROMPT_PATH.exists():
             return PERSONA_PROMPT_PATH.read_text(encoding="utf-8")
         return "You are Motivi, a proactive planning assistant."
+    
+    @staticmethod
+    def _clean_json(json_str: str) -> str:
+        """Remove markdown code blocks from JSON string if present."""
+        return re.sub(r"^```(?:json)?|```$", "", json_str.strip(), flags=re.MULTILINE).strip()
 
     async def respond_with_tools(
         self,
@@ -114,7 +120,20 @@ class ConversationService:
                 # Execute all tool calls
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
-                    function_args = json.loads(tool_call.function.arguments)
+                    
+                    # Clean and parse arguments (protect against markdown JSON)
+                    try:
+                        clean_args = self._clean_json(tool_call.function.arguments)
+                        function_args = json.loads(clean_args)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse tool arguments: {e}. Raw: {tool_call.function.arguments}")
+                        # Skip this tool call and add error message
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps({"success": False, "error": "Invalid JSON arguments"})
+                        })
+                        continue
                     
                     logger.info(f"Executing tool: {function_name} with args: {function_args}")
 

@@ -26,18 +26,27 @@ class ProfileCompletenessService:
         return pc
 
     @staticmethod
-    async def calculate_score(session: AsyncSession, user_id: int) -> float:
+    async def calculate_score(session: AsyncSession, user_id: int, user: User | None = None, core: CoreMemory | None = None) -> float:
         """
         Calculate completeness score based on filled fields.
-        """
-        user = await session.get(User, user_id)
-        if not user:
-            return 0.0
         
-        core_result = await session.execute(
-            select(CoreMemory).where(CoreMemory.user_id == user_id)
-        )
-        core = core_result.scalar_one_or_none()
+        Args:
+            session: Database session
+            user_id: User ID
+            user: Optional pre-loaded User object (optimization)
+            core: Optional pre-loaded CoreMemory object (optimization)
+        """
+        # Use provided objects or fetch if not provided
+        if user is None:
+            user = await session.get(User, user_id)
+            if not user:
+                return 0.0
+        
+        if core is None:
+            core_result = await session.execute(
+                select(CoreMemory).where(CoreMemory.user_id == user_id)
+            )
+            core = core_result.scalar_one_or_none()
         
         # Weight different fields
         score = 0.0
@@ -70,15 +79,31 @@ class ProfileCompletenessService:
         return final_score
 
     @staticmethod
-    async def update_score(session: AsyncSession, user_id: int):
+    async def update_score(session: AsyncSession, user_id: int, user: User | None = None, core: CoreMemory | None = None):
         """
         Recalculate and update score.
+        
+        Args:
+            session: Database session
+            user_id: User ID
+            user: Optional pre-loaded User object (optimization)
+            core: Optional pre-loaded CoreMemory object (optimization)
         """
         pc = await ProfileCompletenessService.get_or_create(session, user_id)
-        new_score = await ProfileCompletenessService.calculate_score(session, user_id)
+        
+        # Check if we need to update (avoid unnecessary recalculations)
+        # Only update if last update was more than 1 hour ago or never updated
+        now = datetime.now(timezone.utc)
+        if pc.last_profile_update:
+            time_since_update = (now - pc.last_profile_update).total_seconds()
+            if time_since_update < 3600:  # Less than 1 hour
+                logger.debug("Skipping profile completeness update for user {} (updated {}s ago)", user_id, int(time_since_update))
+                return
+        
+        new_score = await ProfileCompletenessService.calculate_score(session, user_id, user, core)
         
         pc.score = new_score
-        pc.last_profile_update = datetime.now(timezone.utc)
+        pc.last_profile_update = now
         pc.touch()
         session.add(pc)
         await session.flush()
