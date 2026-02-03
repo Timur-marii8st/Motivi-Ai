@@ -5,12 +5,18 @@ Revision ID: 20260128_add_vector_indexes
 Revises: 20251212_vector_4096
 Create Date: 2026-01-28 18:23:35.000000
 
-Adds IVFFlat indexes for all vector columns to optimize similarity search performance.
-Without these indexes, vector similarity queries perform full table scans.
+IMPORTANT: pgvector has a 2000 dimension limit for ALL index types (HNSW and IVFFlat).
+Our vectors are 4096-dimensional, which exceeds this limit.
 
-Note: Using IVFFlat instead of HNSW because our vectors are 4096-dimensional.
-HNSW has a limit of 2000 dimensions in pgvector.
-IVFFlat is better suited for high-dimensional vectors (>2000 dimensions).
+Options:
+1. Use brute-force search (no index) - slow but accurate
+2. Reduce vector dimensions (PCA/dimensionality reduction) - loses information
+3. Upgrade to pgvector 0.7.0+ which supports higher dimensions
+4. Use alternative vector DB (Qdrant, Milvus, etc.)
+
+For now, we skip index creation and rely on sequential scans.
+Performance will be acceptable for small-medium datasets (<100k vectors).
+For larger datasets, consider dimensionality reduction or alternative solutions.
 """
 from alembic import op
 
@@ -22,57 +28,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create IVFFlat indexes for all vector columns
-    # IVFFlat (Inverted File with Flat compression) is optimal for high-dimensional vectors (>2000 dims)
-    # HNSW has a 2000 dimension limit, so we use IVFFlat for 4096-dimensional vectors
-    # lists parameter: sqrt(total_rows) is a good starting point, we use 100 as default
-    # This can be tuned later based on actual data size
+    # SKIP index creation due to pgvector 2000 dimension limit
+    # Our vectors are 4096-dimensional
     
-    # Episode embeddings
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_episode_embeddings_ivfflat 
-        ON episode_embeddings 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
+    # Log a warning (will appear in migration output)
+    print("=" * 80)
+    print("WARNING: Skipping vector index creation")
+    print("Reason: pgvector has a 2000 dimension limit for indexes")
+    print("Current vector dimension: 4096")
+    print("")
+    print("Impact: Vector similarity searches will use sequential scans")
+    print("Performance: Acceptable for <100k vectors, slow for larger datasets")
+    print("")
+    print("Solutions:")
+    print("1. Upgrade pgvector to 0.7.0+ (if available)")
+    print("2. Use dimensionality reduction (PCA) to reduce to <2000 dims")
+    print("3. Consider alternative vector DB (Qdrant, Milvus)")
+    print("=" * 80)
     
-    # Core memory embeddings
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_core_memory_embeddings_ivfflat 
-        ON core_memory_embeddings 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
-    
-    # Core fact embeddings
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_core_fact_embeddings_ivfflat 
-        ON core_fact_embeddings 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
-    
-    # Working memory entry embeddings
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_working_memory_entry_embeddings_ivfflat 
-        ON working_memory_entry_embeddings 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
-    
-    # Working memory embeddings
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_working_memory_embeddings_ivfflat 
-        ON working_memory_embeddings 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
+    # No index creation - sequential scans will be used
+    pass
 
 
 def downgrade() -> None:
-    # Drop all IVFFlat indexes
-    op.execute("DROP INDEX IF EXISTS idx_episode_embeddings_ivfflat")
-    op.execute("DROP INDEX IF EXISTS idx_core_memory_embeddings_ivfflat")
-    op.execute("DROP INDEX IF EXISTS idx_core_fact_embeddings_ivfflat")
-    op.execute("DROP INDEX IF EXISTS idx_working_memory_entry_embeddings_ivfflat")
-    op.execute("DROP INDEX IF EXISTS idx_working_memory_embeddings_ivfflat")
+    # Nothing to drop since no indexes were created
+    pass
