@@ -11,13 +11,12 @@ def _to_openai_tool(schema: dict) -> dict:
 
 TOOL_SCHEDULE_REMINDER = {
     "name": "schedule_reminder",
-    "description": "Schedule a one-off motivational reminder message for the user at a specific datetime in UTC.",
+    "description": "Schedule a one-off motivational reminder message for the user at a specific datetime. The time should be in user's local timezone.",
     "parameters": {
         "type": "object",
         "properties": {
             "message_text": {"type": "string", "description": "Text of the reminder message to send"},
-            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format. Can be timezone-aware (YYYY-MM-DDTHH:MM:SS+HH:MM or Z), or naive local time (YYYY-MM-DDTHH:MM:SS) in which case 'timezone' should be provided or the user's configured timezone will be used. Example timezone-aware: 2025-11-26T15:30:00Z"},
-            "timezone": {"type": "string", "description": "Optional IANA timezone name (e.g., Europe/Moscow). If provided and the datetime is naive, the datetime will be interpreted in this timezone and converted to UTC."},
+            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS). Use the user's local time. Example: 2025-11-26T15:30:00"},
         },
         "required": ["message_text", "reminder_datetime_iso"],
     },

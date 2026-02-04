@@ -79,67 +79,66 @@ class ToolExecutor:
         from datetime import datetime
         from pytz import utc as _utc
         from ..scheduler.scheduler_instance import scheduler, start_scheduler
+        from ..models.users import User
+        from zoneinfo import ZoneInfo
 
-        # Accept ISO datetimes and 'Z' suffix by normalization
+        # Get reminder datetime (naive local time from LLM)
         iso_str = args["reminder_datetime_iso"]
         if iso_str.endswith("Z"):
             iso_str = iso_str[:-1] + "+00:00"
+        
         reminder_dt = datetime.fromisoformat(iso_str)
-        # Determine timezone to interpret the datetime if it's naive.
-        # Priority: explicit args['timezone'] -> user's configured timezone -> UTC
-        tzname = args.get("timezone")
-        user_timezone = None
-        if not tzname:
-            try:
-                from ..models.users import User
-                result = await self.session.get(User, user_id)
-                user_timezone = getattr(result, "user_timezone", None)
-            except Exception:
-                user_timezone = None
-
-        if tzname is None and user_timezone:
-            tzname = user_timezone
-
-        # If reminder_dt is timezone-aware already, use it; otherwise localize
-        from zoneinfo import ZoneInfo
+        
+        # Get user's timezone from profile (not from LLM - saves tokens!)
+        try:
+            user = await self.session.get(User, user_id)
+            tzname = user.user_timezone if user and user.user_timezone else "UTC"
+        except Exception as e:
+            logger.error("Failed to get user timezone for user {}: {}", user_id, e)
+            tzname = "UTC"
+        
+        # Convert local time to UTC
         now_utc = datetime.now(_utc)
+        
         if reminder_dt.tzinfo is None:
-            if tzname:
-                try:
-                    reminder_dt = reminder_dt.replace(tzinfo=ZoneInfo(tzname))
-                except Exception:
-                    # Fall back to UTC if timezone name invalid
-                    reminder_dt = reminder_dt.replace(tzinfo=_utc)
-            else:
-                reminder_dt = reminder_dt.replace(tzinfo=_utc)
+            # Naive datetime - interpret as local time in user's timezone
+            try:
+                local_tz = ZoneInfo(tzname)
+                # Localize the naive datetime to user's timezone
+                reminder_dt_local = reminder_dt.replace(tzinfo=local_tz)
+                # Convert to UTC for scheduling
+                reminder_dt_utc = reminder_dt_local.astimezone(_utc)
+            except Exception as e:
+                logger.error("Failed to convert timezone {} for user {}: {}", tzname, user_id, e)
+                return {"success": False, "error": f"Invalid timezone: {tzname}"}
         else:
-            # Convert to UTC for consistency
-                reminder_dt = reminder_dt.astimezone(_utc)
-
+            # Already timezone-aware, convert to UTC
+            reminder_dt_utc = reminder_dt.astimezone(_utc)
+            reminder_dt_local = reminder_dt
+        
         # Do not allow scheduling reminders in the past
-        if reminder_dt <= now_utc:
-            logger.warning("Attempted to schedule reminder in the past: {} (now={})", reminder_dt, now_utc)
-            return {"success": False, "error": "Cannot schedule a reminder in the past. Please provide a future UTC datetime."}
-
-        # Generate unique job_id that includes user_id to avoid collisions
+        if reminder_dt_utc <= now_utc:
+            logger.warning("Attempted to schedule reminder in the past: {} UTC (now={})", reminder_dt_utc, now_utc)
+            return {"success": False, "error": "Cannot schedule a reminder in the past. Please provide a future time."}
+        
+        # Generate unique job_id
         unique_id = str(uuid.uuid4())[:8]
         job_id = f"reminder_{user_id}_{unique_id}"
-
+        
         # Check if job already exists and remove it
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
-
+        
         from apscheduler.triggers.date import DateTrigger
-        # Ensure the scheduler is running, so the job will execute
+        # Ensure the scheduler is running
         try:
             if not scheduler.running:
                 start_scheduler()
         except Exception:
-            # If we cannot import or start scheduler, continue; job might be persisted for later worker
             logger.debug("Could not ensure scheduler was running when scheduling reminder")
-
-        trigger = DateTrigger(run_date=reminder_dt, timezone=_utc)
-
+        
+        trigger = DateTrigger(run_date=reminder_dt_utc, timezone=_utc)
+        
         scheduler.add_job(
             func="app.scheduler.jobs:send_one_off_reminder_job",
             trigger=trigger,
@@ -147,24 +146,20 @@ class ToolExecutor:
             args=[user_id, chat_id, args["message_text"]],
             replace_existing=True,
         )
-
+        
         # Build human-friendly time info
-        scheduled_utc_iso = reminder_dt.astimezone(_utc).isoformat()
-        scheduled_local_iso = None
-        if tzname:
-            try:
-                from zoneinfo import ZoneInfo
-                scheduled_local_iso = reminder_dt.astimezone(ZoneInfo(tzname)).isoformat()
-            except Exception:
-                scheduled_local_iso = scheduled_utc_iso
-
-        logger.info("Scheduled one-off reminder for user {} at {} (job_id={})", user_id, reminder_dt, job_id)
+        scheduled_utc_iso = reminder_dt_utc.isoformat()
+        scheduled_local_iso = reminder_dt_local.isoformat() if 'reminder_dt_local' in locals() else scheduled_utc_iso
+        
+        logger.info("Scheduled reminder for user {} at {} UTC ({} local in {})", 
+                   user_id, reminder_dt_utc, reminder_dt_local if 'reminder_dt_local' in locals() else 'N/A', tzname)
+        
         return {
             "success": True,
             "job_id": job_id,
             "scheduled_for_utc": scheduled_utc_iso,
             "scheduled_for_local": scheduled_local_iso,
-            "timezone": tzname or "UTC",
+            "timezone": tzname,
         }
 
     async def _cancel_reminder(self, args: Dict, user_id: int) -> Dict:
