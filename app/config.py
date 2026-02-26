@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     LIMIT_DAILY_TRIAL: int = 20      # Guest/Trial
     LIMIT_DAILY_PREMIUM: int = 200   # Subscriber
     LIMIT_DAILY_EXPIRED: int = 0     # Hard block after trial ends
+
+    # Code Execution Daily Limits
+    CODE_EXEC_DAILY_TRIAL: int = 5
+    CODE_EXEC_DAILY_PREMIUM: int = 50
     
     @property
     def admin_ids(self) -> list[int]:

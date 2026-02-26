@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 
@@ -18,6 +18,14 @@ from ..states import HabitCreation
 router = Router(name="habits")
 
 
+def _habit_keyboard(habit_id: int) -> InlineKeyboardMarkup:
+    """Build inline keyboard for a single habit card."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Отметить", callback_data=f"log_habit:{habit_id}"),
+        InlineKeyboardButton(text="🗑 Архив", callback_data=f"archive_habit:{habit_id}"),
+    ]])
+
+
 @router.message(F.text == "/cancel")
 async def cancel_habit_creation(message: Message, state: FSMContext):
     """Cancel habit creation process."""
@@ -25,57 +33,107 @@ async def cancel_habit_creation(message: Message, state: FSMContext):
     if current_state is None or not current_state.startswith("HabitCreation"):
         return
     await state.clear()
-    await message.answer("\u274c \u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u043f\u0440\u0438\u0432\u044b\u0447\u043a\u0438 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e.")
+    await message.answer("❌ Создание привычки отменено.")
 
 
 @router.message(F.text == "/habits")
 async def list_habits_cmd(message: Message, session):
-    """List all active habits."""
+    """List all active habits with inline action buttons."""
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
     habits = await HabitService.list_habits(session, user.id, active_only=True)
 
     if not habits:
-        await message.answer("\u0423 \u0442\u0435\u0431\u044f \u0435\u0449\u0451 \u043d\u0435\u0442 \u043f\u0440\u0438\u0432\u044b\u0447\u0435\u043a. \u041d\u0430\u0436\u043c\u0438 /add_habit, \u0447\u0442\u043e\u0431\u044b \u0441\u043e\u0437\u0434\u0430\u0442\u044c!")
+        await message.answer("У тебя ещё нет привычек. Нажми /add_habit, чтобы создать!")
         return
 
-    # Batch: habit model already carries streak data; no extra per-habit query needed
-    text = "<b>\U0001f4cb \u0422\u0432\u043e\u0438 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u043f\u0440\u0438\u0432\u044b\u0447\u043a\u0438:</b>\n\n"
+    await message.answer("<b>📋 Твои активные привычки:</b>")
+
     for h in habits:
         stats = await HabitService.get_habit_stats(session, h.id)
-        text += (
-            f"\U0001f539 <b>{html.escape(h.name)}</b> (ID: {h.id})\n"
-            f"   Streak: {stats['current_streak']} \U0001f525 | Best: {stats['longest_streak']}\n"
+        card = (
+            f"🔹 <b>{html.escape(h.name)}</b>\n"
+            f"   Streak: {stats['current_streak']} 🔥 | Best: {stats['longest_streak']}\n"
             f"   Cadence: {h.cadence} | Target: {h.target_count}\n"
-            f"   Reminder: {h.reminder_time or 'None'}\n\n"
+            f"   Reminder: {h.reminder_time or 'None'}\n"
         )
+        await message.answer(card, reply_markup=_habit_keyboard(h.id))
 
-    await message.answer(text)
+
+@router.callback_query(F.data.startswith("log_habit:"))
+async def log_habit_callback(callback: CallbackQuery, session):
+    """Log habit completion via inline button."""
+    habit_id = int(callback.data.split(":")[1])
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+
+    try:
+        tz = ZoneInfo(user.user_timezone) if user.user_timezone else timezone.utc
+        log_date = datetime.now(timezone.utc).astimezone(tz).date()
+        await HabitService.log_habit(session, habit_id, log_date)
+        await session.commit()
+
+        habit = await session.get(Habit, habit_id)
+        if habit:
+            stats = await HabitService.get_habit_stats(session, habit.id)
+            updated_card = (
+                f"🔹 <b>{html.escape(habit.name)}</b> ✅\n"
+                f"   Streak: {stats['current_streak']} 🔥 | Best: {stats['longest_streak']}\n"
+                f"   Cadence: {habit.cadence} | Target: {habit.target_count}\n"
+                f"   Reminder: {habit.reminder_time or 'None'}\n"
+            )
+            await callback.answer(f"✅ Зафиксировано! Streak: {stats['current_streak']} 🔥")
+            await callback.message.edit_text(updated_card, reply_markup=_habit_keyboard(habit_id))
+    except ValueError as e:
+        await callback.answer(f"❌ {str(e)}", show_alert=True)
+    except Exception as e:
+        logger.exception("Failed to log habit {} via callback: {}", habit_id, e)
+        await callback.answer("Не удалось зафиксировать привычку. Попробуй ещё раз.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("archive_habit:"))
+async def archive_habit_callback(callback: CallbackQuery, session):
+    """Archive habit via inline button."""
+    habit_id = int(callback.data.split(":")[1])
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+
+    habit = await session.get(Habit, habit_id)
+    if not habit or habit.user_id != user.id:
+        await callback.answer("Привычка не найдена.", show_alert=True)
+        return
+
+    await HabitService.archive_habit(session, habit_id)
+    await session.commit()
+
+    await callback.answer("🗑 Привычка архивирована.")
+    await callback.message.edit_text(
+        f"🗑 <b>{html.escape(habit.name)}</b> — <i>архивирована</i>",
+        reply_markup=None,
+    )
 
 
 @router.message(F.text.startswith("/add_habit"))
 async def add_habit_cmd(message: Message, state: FSMContext):
     """Start habit creation flow."""
     await state.clear()
-    await message.answer("\u041a\u0430\u043a \u0437\u043e\u0432\u0443\u0442 \u0442\u0432\u043e\u044e \u043d\u043e\u0432\u0443\u044e \u043f\u0440\u0438\u0432\u044b\u0447\u043a\u0443?")
+    await message.answer("Как назовём новую привычку?")
     await state.set_state(HabitCreation.name)
 
 
 @router.message(HabitCreation.name, F.text)
 async def habit_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
-    await message.answer("\u041e\u0442\u043b\u0438\u0447\u043d\u043e! \u041a\u0430\u043a \u0447\u0430\u0441\u0442\u043e? \u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e \u0438\u043b\u0438 \u0435\u0436\u0435\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u043e")
+    await message.answer("Отлично! Как часто? Ежедневно или еженедельно")
     await state.set_state(HabitCreation.cadence)
 
 
 @router.message(HabitCreation.cadence, F.text)
 async def habit_cadence(message: Message, state: FSMContext):
     cadence = message.text.strip().lower()
-    if cadence not in ["\u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e", "\u0435\u0436\u0435\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u043e", "daily", "weekly"]:
-        await message.answer("\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0432\u044b\u0431\u0435\u0440\u0438 '\u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e' \u0438\u043b\u0438 '\u0435\u0436\u0435\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u043e'.")
+    if cadence not in ["ежедневно", "еженедельно", "daily", "weekly"]:
+        await message.answer("Пожалуйста, выбери 'ежедневно' или 'еженедельно'.")
         return
-    cadence = "daily" if cadence in ["\u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e", "daily"] else "weekly"
+    cadence = "daily" if cadence in ["ежедневно", "daily"] else "weekly"
     await state.update_data(cadence=cadence)
-    await message.answer("\u0425\u043e\u0447\u0435\u0448\u044c \u0431\u0443\u0434\u0443 \u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u0442\u044c? \u041e\u0442\u0432\u0435\u0442\u044c \u0432\u0440\u0435\u043c\u0435\u043d\u0435\u043c (\u0427\u0427:\u041c\u041c) \u0438\u043b\u0438 '\u043d\u0435\u0442'.")
+    await message.answer("Хочешь буду ежедневно напоминать? Ответь временем (ЧЧ:ММ) или 'нет'.")
     await state.set_state(HabitCreation.reminder)
 
 
@@ -84,11 +142,11 @@ async def habit_reminder(message: Message, state: FSMContext, session):
     text = message.text.strip().lower()
     reminder_time = None
 
-    if text not in ["no", "\u043d\u0435\u0442"]:
+    if text not in ["no", "нет"]:
         from ...utils.timeparse import parse_hhmm
         reminder_time = parse_hhmm(text)
         if not reminder_time:
-            await message.answer("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0444\u043e\u0440\u043c\u0430\u0442 \u0432\u0440\u0435\u043c\u0435\u043d\u0438. \u041e\u0442\u0432\u0435\u0442\u044c \u0427\u0427:\u041c\u041c \u0438\u043b\u0438 '\u043d\u0435\u0442'.")
+            await message.answer("Неверный формат времени. Ответь ЧЧ:ММ или 'нет'.")
             return
 
     data = await state.get_data()
@@ -106,36 +164,38 @@ async def habit_reminder(message: Message, state: FSMContext, session):
     if reminder_time:
         await JobManager.schedule_habit_reminders(session, user.id)
 
-    await message.answer(f"\u2705 \u041f\u0440\u0438\u0432\u044b\u0447\u043a\u0430 <b>{html.escape(habit.name)}</b> \u0441\u043e\u0437\u0434\u0430\u043d\u0430! \u041d\u0430\u0436\u043c\u0438 /log_habit {habit.id}, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0435\u0451.")
+    await message.answer(
+        f"✅ Привычка <b>{html.escape(habit.name)}</b> создана!\n"
+        f"Используй /habits, чтобы отмечать выполнение кнопками."
+    )
     await state.clear()
 
 
 @router.message(F.text.regexp(r"^/log_habit\s+(\d+)"))
 async def log_habit_cmd(message: Message, session):
-    """Log a habit completion."""
+    """Log a habit completion via text command (kept for compatibility with reminders)."""
     match = re.match(r"^/log_habit\s+(\d+)", message.text)
     if not match:
-        await message.answer("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435: /log_habit <id_\u043f\u043e\u0432\u0435\u0434\u0435\u043d\u0438\u044f>")
+        await message.answer("Использование: /log_habit <id_повеления>")
         return
 
     habit_id = int(match.group(1))
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
     try:
-        # Use user_timezone (correct property name) with fallback to UTC
         tz = ZoneInfo(user.user_timezone) if user.user_timezone else timezone.utc
         log_date = datetime.now(timezone.utc).astimezone(tz).date()
-        log = await HabitService.log_habit(session, habit_id, log_date)
+        await HabitService.log_habit(session, habit_id, log_date)
         await session.commit()
 
         habit = await session.get(Habit, habit_id)
         if habit:
             await message.answer(
-                f"\u2705 \u0417\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043e <b>{html.escape(habit.name)}</b>!\n"
-                f"\u0422\u0435\u043a\u0443\u0449\u0438\u0439 \u0441\u0442\u0440\u0438\u043a: {habit.current_streak} \U0001f525"
+                f"✅ Зафиксировано <b>{html.escape(habit.name)}</b>!\n"
+                f"Текущий streak: {habit.current_streak} 🔥"
             )
     except ValueError as e:
-        await message.answer(f"\u274c {html.escape(str(e))}")
+        await message.answer(f"❌ {html.escape(str(e))}")
     except Exception as e:
         logger.exception("Failed to log habit {}: {}", habit_id, e)
-        await message.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043f\u0440\u0438\u0432\u044b\u0447\u043a\u0443. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439 \u0435\u0449\u0451 \u0440\u0430\u0437.")
+        await message.answer("Не удалось зафиксировать привычку. Попробуй ещё раз.")

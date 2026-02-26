@@ -31,7 +31,7 @@ class ToolExecutor:
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
             elif tool_name == "execute_code":
-                return await self._execute_code(args)
+                return await self._execute_code(args, user_id)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -411,9 +411,14 @@ class ToolExecutor:
             # The session is shared with the handler
             return {"success": False, "error": str(e)}
 
-    async def _execute_code(self, args: dict) -> dict:
-        """Execute code in a sandboxed Docker container."""
+    async def _execute_code(self, args: dict, user_id: int) -> dict:
+        """Execute code in a sandboxed Docker container with subscription gate and rate limiting."""
+        from datetime import datetime, timezone as _tz
         from ..services.code_executor_service import code_executor, SUPPORTED_LANGUAGES
+        from ..services.subscription_service import SubscriptionService
+        from ..services.conversation_history_service import ConversationHistoryService
+        from ..models.users import User
+        from ..config import settings
 
         language = args.get("language", "").lower().strip()
         code = args.get("code", "").strip()
@@ -427,6 +432,37 @@ class ToolExecutor:
                 "success": False,
                 "error": f"Unsupported language '{language}'. Use one of: {', '.join(SUPPORTED_LANGUAGES)}",
             }
+
+        # Subscription gate
+        user = await self.session.get(User, user_id)
+        if not user:
+            return {"success": False, "error": "User not found"}
+
+        status = await SubscriptionService.get_user_status(user)
+        if status == "expired":
+            return {
+                "success": False,
+                "error": "Code execution requires an active subscription. Use /subscribe to upgrade.",
+            }
+
+        # Rate limiting (skip for admins)
+        if status != "admin":
+            limit = (
+                settings.CODE_EXEC_DAILY_PREMIUM
+                if status == "premium"
+                else settings.CODE_EXEC_DAILY_TRIAL
+            )
+            redis = ConversationHistoryService._get_redis_client()
+            today_str = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+            counter_key = f"code_exec:{user_id}:{today_str}"
+            current_count = await redis.incr(counter_key)
+            if current_count == 1:
+                await redis.expire(counter_key, 86400 + 3600)
+            if current_count > limit:
+                return {
+                    "success": False,
+                    "error": f"Daily code execution limit reached ({limit}/day). Try again tomorrow.",
+                }
 
         result = await code_executor.run(language=language, code=code)
         return result.to_dict()

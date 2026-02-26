@@ -14,6 +14,7 @@ from ..services.profile_completeness_service import ProfileCompletenessService
 from .client import async_client
 
 PERSONA_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "moti_system.txt"
+PERSONA_PROMPT_ENG_PATH = Path(__file__).parent.parent / "prompts" / "moti_system_eng.txt"
 
 class ConversationService:
     """
@@ -22,12 +23,18 @@ class ConversationService:
 
     def __init__(self):
         self.client = async_client
-        self.persona_prompt = self._load_persona()
+        self.persona_prompt_ru = self._load_prompt(PERSONA_PROMPT_PATH, "You are Motivi, a proactive planning assistant.")
+        self.persona_prompt_en = self._load_prompt(PERSONA_PROMPT_ENG_PATH, "You are Motivi, a proactive planning assistant.")
 
-    def _load_persona(self) -> str:
-        if PERSONA_PROMPT_PATH.exists():
-            return PERSONA_PROMPT_PATH.read_text(encoding="utf-8")
-        return "You are Motivi, a proactive planning assistant."
+    def _load_prompt(self, path: Path, fallback: str) -> str:
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        return fallback
+
+    def _get_persona(self, language: str) -> str:
+        if language == "en":
+            return self.persona_prompt_en
+        return self.persona_prompt_ru
     
     @staticmethod
     def _clean_json(json_str: str) -> str:
@@ -43,6 +50,7 @@ class ConversationService:
         session: AsyncSession,
         conversation_history: Optional[List[dict]] = None,
         max_iterations: int = 5,
+        language: str = "ru",
     ) -> Tuple[str, List[dict]]:
         """
         Generate a response with potential tool calls using the OpenAI compatible API.
@@ -51,7 +59,8 @@ class ConversationService:
         """
         context_dict = memory_pack.to_context_dict()
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
-        system_instruction = f"{self.persona_prompt}\n\n{context_block}"
+        persona = self._get_persona(language)
+        system_instruction = f"{persona}\n\n{context_block}"
         
         # 1. Prepare Messages
         # Always start with fresh system message (contains current memory context)

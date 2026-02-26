@@ -15,6 +15,7 @@ from ...services.tool_executor import ToolExecutor
 from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
+from ...services.settings_service import SettingsService
 from ...utils.get_user_time import get_time_in_zone
 
 
@@ -72,9 +73,17 @@ async def handle_chat(message: Message, session):
             # Fallback to UTC time
             from datetime import datetime, timezone as _tz
             user_time = datetime.now(_tz.utc).isoformat()
-            
+
         time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
         user_text = f"{user_text}\n\n{time_block}"
+
+        # Resolve user language preference
+        language = "ru"
+        try:
+            user_settings = await SettingsService.get_or_create(session, user.id)
+            language = (user_settings.summary_preferences_json or {}).get("language", "ru")
+        except Exception as e:
+            logger.warning("Failed to load user settings for language for user {}: {}", user.id, e)
 
         # Generate response and get updated history
         reply, updated_history = await conversation_service.respond_with_tools(
@@ -84,6 +93,7 @@ async def handle_chat(message: Message, session):
             tool_executor,
             session,
             conversation_history=history,
+            language=language,
         )
 
         await message.answer(reply)

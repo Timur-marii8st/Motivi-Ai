@@ -13,6 +13,7 @@ from ..models.settings import UserSettings
 from ..models.episode import Episode, EpisodeEmbedding
 from ..models.working_memory import WorkingMemory, WorkingEmbedding
 from ..services.proactive_flows import ProactiveFlows
+from ..models.user_trigger import UserTrigger
 from ..config import settings
 
 
@@ -56,6 +57,32 @@ async def weekly_plan_job(user_id: int):
 async def monthly_plan_job(user_id: int):
     """Monthly plan generation."""
     await _run_proactive_job(user_id, "monthly_plan")
+
+
+async def custom_trigger_job(user_id: int, trigger_id: int):
+    """Execute a user-defined custom proactive trigger."""
+    logger.info("Running custom trigger {} for user {}", trigger_id, user_id)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            logger.info("User {} is in break mode; skipping trigger {}", user_id, trigger_id)
+            return
+        user = await session.get(User, user_id)
+        if not user:
+            logger.warning("User {} not found for trigger {}", user_id, trigger_id)
+            return
+        trigger = await session.get(UserTrigger, trigger_id)
+        if not trigger or not trigger.active:
+            logger.info("Trigger {} is inactive or missing; skipping", trigger_id)
+            return
+        flows = ProactiveFlows(session)
+        await flows._run_flow(user=user, prompt=trigger.prompt, greeting="")
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in custom trigger {} for user {}: {}", trigger_id, user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 
 async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: str):
