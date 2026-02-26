@@ -76,7 +76,7 @@ async def custom_trigger_job(user_id: int, trigger_id: int):
             logger.info("Trigger {} is inactive or missing; skipping", trigger_id)
             return
         flows = ProactiveFlows(session)
-        await flows._run_flow(user=user, prompt=trigger.prompt, greeting="")
+        await flows._run_flow(user=user, prompt=trigger.prompt, greeting=f"⏰ <b>{trigger.name}</b>")
         await session.commit()
     except Exception as e:
         logger.exception("Error in custom trigger {} for user {}: {}", trigger_id, user_id, e)

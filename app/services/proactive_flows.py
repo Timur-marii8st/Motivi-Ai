@@ -46,16 +46,27 @@ class ProactiveFlows:
         Shared helper for all proactive flows. Handles memory assembly,
         LLM call, message delivery, history persistence, and fact extraction.
         """
+        # Load user's language preference for correct persona selection
+        language = "ru"
+        try:
+            from ..services.settings_service import SettingsService
+            user_settings = await SettingsService.get_or_create(self.session, user.id)
+            language = (user_settings.summary_preferences_json or {}).get("language", "ru")
+        except Exception:
+            pass  # Fall back to Russian on any error
+
         history = await ConversationHistoryService.get_history(user.tg_chat_id)
         memory_pack = await self.memory_orchestrator.assemble(self.session, user, prompt, top_k=top_k)
         response, updated_history = await self.conversation_service.respond_with_tools(
             prompt, memory_pack, user.tg_chat_id, self.tool_executor, self.session,
-            conversation_history=history
+            conversation_history=history, language=language,
         )
+        # Build final message: skip leading newlines if greeting is empty
+        message_text = f"{greeting}\n\n{response}" if greeting else response
         # Persist history and send message concurrently
         await asyncio.gather(
             ConversationHistoryService.save_history(user.tg_chat_id, updated_history),
-            self.bot.send_message(user.tg_chat_id, f"{greeting}\n\n{response}"),
+            self.bot.send_message(user.tg_chat_id, message_text),
         )
         # Extract and store important info — non-fatal if it fails
         try:

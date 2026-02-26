@@ -12,7 +12,6 @@ from ...llm.conversation_service import ConversationService
 from ...services.extractor_service import ExtractorService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...services.tool_executor import ToolExecutor
-from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
 from ...services.settings_service import SettingsService
