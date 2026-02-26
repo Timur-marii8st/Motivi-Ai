@@ -30,6 +30,8 @@ class ToolExecutor:
                 return await self._create_calendar_event(args, user_id)
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
+            elif tool_name == "execute_code":
+                return await self._execute_code(args)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -408,4 +410,24 @@ class ToolExecutor:
             # Don't rollback - let the caller/middleware handle transaction fate
             # The session is shared with the handler
             return {"success": False, "error": str(e)}
+
+    async def _execute_code(self, args: dict) -> dict:
+        """Execute code in a sandboxed Docker container."""
+        from ..services.code_executor_service import code_executor, SUPPORTED_LANGUAGES
+
+        language = args.get("language", "").lower().strip()
+        code = args.get("code", "").strip()
+
+        if not language:
+            return {"success": False, "error": "language is required"}
+        if not code:
+            return {"success": False, "error": "code is required"}
+        if language not in SUPPORTED_LANGUAGES:
+            return {
+                "success": False,
+                "error": f"Unsupported language '{language}'. Use one of: {', '.join(SUPPORTED_LANGUAGES)}",
+            }
+
+        result = await code_executor.run(language=language, code=code)
+        return result.to_dict()
 

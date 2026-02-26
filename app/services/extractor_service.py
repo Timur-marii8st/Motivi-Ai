@@ -1,3 +1,9 @@
+from __future__ import annotations
+from pathlib import Path
+import re
+from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
+
 from ..config import settings
 from ..models.facts import FactExtraction
 from .episodic_memory_service import EpisodicMemoryService
@@ -5,14 +11,8 @@ from .core_memory_service import CoreMemoryService
 from .working_memory_service import WorkingMemoryService
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 from ..llm.client import async_client
-import logging
-from pathlib import Path
-import re
-from sqlalchemy.ext.asyncio import AsyncSession
 
 GEMMA_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "gemma_system.txt"
-
-logger = logging.getLogger(__name__)
 
 # instantiate a shared embeddings client and services that depend on it
 _emb_client = GeminiEmbeddings()
@@ -62,7 +62,7 @@ class ExtractorService:
                 clean_json = re.sub(r"^```(?:json)?|```$", "", reply.strip(), flags=re.MULTILINE).strip()
                 extraction = FactExtraction.model_validate_json(clean_json)
             except Exception as e:
-                logger.error(f"Failed to parse extraction JSON: {e}")
+                logger.error("Failed to parse extraction JSON: {}", e)
                 return False
 
             facts = extraction.personal_information
@@ -71,21 +71,21 @@ class ExtractorService:
                     for item in facts:
                         if item.importance.lower() == "core":
                             await core_memory_service.store_core(session=session, user_id=user_id, fact_text=item.fact)
-                            logger.info(f"Important fact extracted: {item.fact} (Importance: {item.importance})")
+                            logger.info("Important fact extracted: {} (Importance: {})", item.fact, item.importance)
                         
                         if item.importance.lower() == "episode":
                             await episodic_memory_service.store_episode(session=session, user_id=user_id, fact_text=item.fact)
-                            logger.info(f"Episodic memory fact extracted: {item.fact} (Importance: {item.importance})")
+                            logger.info("Episodic memory fact extracted: {} (Importance: {})", item.fact, item.importance)
 
                         if item.importance.lower() == "working":
                             await working_memory_service.store_working(session=session, user_id=user_id, fact_text=item.fact)
-                            logger.info(f"Working memory fact extracted: {item.fact} (Importance: {item.importance})")
+                            logger.info("Working memory fact extracted: {} (Importance: {})", item.fact, item.importance)
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to store extracted facts: {e}")
+                    logger.error("Failed to store extracted facts: {}", e)
                     # Don't rollback here - let the middleware handle transaction fate
                     # The session is shared with the handler and middleware
                     return False
         except Exception as e:
-            logger.error(f"Extraction failed: {e}")
+            logger.error("Extraction failed: {}", e)
             return False

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 import json
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ class MemoryPack:
         self,
         user: User,
         core: CoreMemory,
-        core_facts: Optional[List] ,
+        core_facts: Optional[List[Any]],
         working: WorkingMemory,
         episodes: List[Episode],
         working_history: Optional[List[WorkingMemory]] = None,
@@ -92,28 +92,32 @@ class MemoryOrchestrator:
     ) -> MemoryPack:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
+        All three vector-search queries run in parallel for better latency.
         """
-        # Retrieve similar CoreFact entries (per-fact retrieval) - only relevant facts
-        similar_core_facts = await self.core_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k
+        import asyncio
+
+        # Run all three independent retrieval operations concurrently
+        (
+            similar_core_facts,
+            working_results,
+            episodes,
+            working_history_result,
+        ) = await asyncio.gather(
+            self.core_service.retrieve_similar(session, user.id, query_text=query_text, top_k=top_k),
+            self.working_service.retrieve_similar(session, user.id, query_text=query_text),
+            self.episodic_service.retrieve_similar(session, user.id, query_text=query_text, top_k=top_k),
+            session.execute(
+                select(WorkingMemoryEntry)
+                .where(WorkingMemoryEntry.user_id == user.id)
+                .order_by(WorkingMemoryEntry.history_order.asc())
+                .limit(7)
+            ),
         )
-        # Ensure CoreMemory row exists
+
+        # Ensure CoreMemory row exists (sequential — depends on nothing above)
         core = await self.core_service.get_or_create(session, user.id)
-        
-        # Use only relevant core facts instead of loading all facts
-        # This prevents context window bloat as the user accumulates more facts over time
         core_facts = similar_core_facts
 
-        working_results = await self.working_service.retrieve_similar(
-            session, user.id, query_text=query_text
-        )
-        # Get all working memory entries for this user
-        working_history_result = await session.execute(
-            select(WorkingMemoryEntry)
-            .where(WorkingMemoryEntry.user_id == user.id)
-            .order_by(WorkingMemoryEntry.history_order.asc())
-            .limit(7)
-        )
         working_history = working_history_result.scalars().all()
 
         # Choose current working memory summary (from semantic results or ensure it exists)
@@ -121,14 +125,9 @@ class MemoryOrchestrator:
             working = working_results[0]
         else:
             working = await self.working_service.get_or_create(session, user.id)
-            
-        # RAG retrieval
-        episodes = await self.episodic_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k
-        )
 
         logger.debug(
-            "Assembled memory pack for user {}: {} core facts, {} episodes retrieved", 
+            "Assembled memory pack for user {}: {} core facts, {} episodes retrieved",
             user.id, len(core_facts), len(episodes)
         )
 

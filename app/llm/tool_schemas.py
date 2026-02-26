@@ -116,6 +116,33 @@ TOOL_CHECK_AVAILABILITY = {
     },
 }
 
+
+TOOL_EXECUTE_CODE = {
+    "name": "execute_code",
+    "description": (
+        "Execute a code snippet in an isolated sandbox and return the output. "
+        "Use this when the user asks you to run code, compute something, validate logic, "
+        "or demonstrates a programming concept. Supported languages: python, javascript, bash. "
+        "All executions are sandboxed: no network access, strict memory and CPU limits, "
+        "10-second timeout. Do NOT use for malicious, harmful, or privacy-violating code."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "language": {
+                "type": "string",
+                "enum": ["python", "javascript", "bash"],
+                "description": "Programming language of the code snippet.",
+            },
+            "code": {
+                "type": "string",
+                "description": "The source code to execute. Keep it concise and purposeful.",
+            },
+        },
+        "required": ["language", "code"],
+    },
+}
+
 RAW_TOOLS = [
     TOOL_SCHEDULE_REMINDER,
     TOOL_CANCEL_REMINDER,
@@ -125,6 +152,7 @@ RAW_TOOLS = [
     TOOL_EDIT_PLAN,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
+    TOOL_EXECUTE_CODE,
 ]
 
 ALL_TOOLS = [_to_openai_tool(t) for t in RAW_TOOLS]

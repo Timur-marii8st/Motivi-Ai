@@ -1,109 +1,62 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, date
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, delete
-from aiogram.client.default import DefaultBotProperties 
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 
 from ..db import AsyncSessionLocal
 from ..models.users import User
+from ..models.habit import Habit, HabitLog
 from ..models.settings import UserSettings
-from ..services.proactive_flows import ProactiveFlows
-from ..config import settings
 from ..models.episode import Episode, EpisodeEmbedding
 from ..models.working_memory import WorkingMemory, WorkingEmbedding
-from datetime import timedelta, datetime
-from sqlmodel import delete
+from ..services.proactive_flows import ProactiveFlows
+from ..config import settings
+
+
+async def _run_proactive_job(user_id: int, method_name: str) -> None:
+    """Generic runner for proactive flow jobs. Handles session lifecycle, break-mode, commit/rollback."""
+    logger.info("Running {} for user {}", method_name, user_id)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            logger.info("User {} is in break mode; skipping {}", user_id, method_name)
+            return
+        user = await session.get(User, user_id)
+        if not user:
+            logger.warning("User {} not found for {}", user_id, method_name)
+            return
+        flows = ProactiveFlows(session)
+        await getattr(flows, method_name)(user)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in {} for user {}: {}", method_name, user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
+
 
 async def morning_checkin_job(user_id: int):
     """Morning check-in job."""
-    logger.info("Running morning check-in for user {}", user_id)
-    session = AsyncSessionLocal()
-    try:
-        # Check break mode
-        if await _is_break_mode_active(session, user_id):
-            logger.info("User {} is in break mode; skipping morning check-in", user_id)
-            return
-        
-        user = await session.get(User, user_id)
-        if not user:
-            logger.warning("User {} not found", user_id)
-            return
-        
-        flows = ProactiveFlows(session)
-        await flows.morning_checkin(user)
-        await session.commit()
-    except Exception as e:
-        logger.exception("Error in morning_checkin_job for user {}: {}", user_id, e)
-        await session.rollback()
-    finally:
-        await session.close()
+    await _run_proactive_job(user_id, "morning_checkin")
+
 
 async def evening_wrapup_job(user_id: int):
     """Evening wrap-up job."""
-    logger.info("Running evening wrap-up for user {}", user_id)
-    session = AsyncSessionLocal()
-    try:
-        if await _is_break_mode_active(session, user_id):
-            logger.info("User {} is in break mode; skipping evening wrap-up", user_id)
-            return
-        
-        user = await session.get(User, user_id)
-        if not user:
-            return
-        
-        flows = ProactiveFlows(session)
-        await flows.evening_wrapup(user)
-        await session.commit()
-    except Exception as e:
-        logger.exception("Error in evening_wrapup_job for user {}: {}", user_id, e)
-        await session.rollback()
-    finally:
-        await session.close()
+    await _run_proactive_job(user_id, "evening_wrapup")
+
 
 async def weekly_plan_job(user_id: int):
     """Weekly plan generation."""
-    logger.info("Running weekly plan for user {}", user_id)
-    session = AsyncSessionLocal()
-    try:
-        if await _is_break_mode_active(session, user_id):
-            logger.info("User {} is in break mode; skipping weekly plan", user_id)
-            return
-        
-        user = await session.get(User, user_id)
-        if not user:
-            return
-        
-        flows = ProactiveFlows(session)
-        await flows.weekly_plan(user)
-        await session.commit()
-    except Exception as e:
-        logger.exception("Error in weekly_plan_job for user {}: {}", user_id, e)
-        await session.rollback()
-    finally:
-        await session.close()
+    await _run_proactive_job(user_id, "weekly_plan")
+
 
 async def monthly_plan_job(user_id: int):
     """Monthly plan generation."""
-    logger.info("Running monthly plan for user {}", user_id)
-    session = AsyncSessionLocal()
-    try:
-        if await _is_break_mode_active(session, user_id):
-            logger.info("User {} is in break mode; skipping monthly plan", user_id)
-            return
-        
-        user = await session.get(User, user_id)
-        if not user:
-            return
-        
-        flows = ProactiveFlows(session)
-        await flows.monthly_plan(user)
-        await session.commit()
-    except Exception as e:
-        logger.exception("Error in monthly_plan_job for user {}: {}", user_id, e)
-        await session.rollback()
-    finally:
-        await session.close()
+    await _run_proactive_job(user_id, "monthly_plan")
+
 
 async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: str):
     """Send a one-off reminder message to the user (scheduled by LLM tool)."""
@@ -113,186 +66,126 @@ async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: st
         if await _is_break_mode_active(session, user_id):
             logger.info("User {} is in break mode; skipping one-off reminder", user_id)
             return
-
         user = await session.get(User, user_id)
         if not user:
             logger.warning("User {} not found for one-off reminder", user_id)
             return
-
-        from aiogram import Bot
-        
-        bot = Bot(
-            token=settings.TELEGRAM_BOT_TOKEN, 
-            default=DefaultBotProperties(parse_mode="HTML")
-        )
-        
-        await bot.send_message(chat_id, message_text)
-        await bot.session.close() # Good practice to close the session since it's one-off
-        logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        try:
+            await bot.send_message(chat_id, message_text)
+            logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
+        finally:
+            await bot.session.close()
     except Exception as e:
         logger.exception("Error in send_one_off_reminder_job for user {}: {}", user_id, e)
         await session.rollback()
     finally:
         await session.close()
 
+
 async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
     """Check if user is in break mode."""
     result = await session.execute(select(UserSettings).where(UserSettings.user_id == user_id))
-    settings = result.scalar_one_or_none()
-    
-    if not settings or not settings.break_mode_active:
+    user_settings = result.scalar_one_or_none()
+    if not user_settings or not user_settings.break_mode_active:
         return False
-    
-    if settings.break_mode_until and settings.break_mode_until > datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    if user_settings.break_mode_until and user_settings.break_mode_until > now:
         return True
-    
-    # Expired; deactivate
-    if settings.break_mode_until and settings.break_mode_until <= datetime.now(timezone.utc):
-        settings.break_mode_active = False
-        settings.break_mode_until = None
-        session.add(settings)
+    if user_settings.break_mode_until and user_settings.break_mode_until <= now:
+        user_settings.break_mode_active = False
+        user_settings.break_mode_until = None
+        session.add(user_settings)
         await session.commit()
         return False
-    
-    return settings.break_mode_active
+    return user_settings.break_mode_active
+
 
 async def habit_reminder_job(habit_id: int):
     """Send habit reminder."""
     logger.info("Running habit reminder for habit {}", habit_id)
     session = AsyncSessionLocal()
     try:
-        from ..models.habit import Habit
-        from aiogram import Bot
-        
         habit = await session.get(Habit, habit_id)
         if not habit or not habit.active:
             return
-        
-        # Check if already logged today
-        from ..models.habit import HabitLog
-        from datetime import date
         result = await session.execute(
             select(HabitLog).where(
                 HabitLog.habit_id == habit_id,
                 HabitLog.log_date == date.today(),
             )
         )
-        log = result.scalar_one_or_none()
-        
-        if log:
+        if result.scalar_one_or_none():
             logger.info("Habit {} already logged today; skipping reminder", habit_id)
             return
-        
-        # Get user and send reminder
-        from ..models.users import User
         user = await session.get(User, habit.user_id)
         if not user:
             return
-        
-        bot = Bot(
-            token=settings.TELEGRAM_BOT_TOKEN, 
-            default=DefaultBotProperties(parse_mode="HTML")
-        )
-        
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
         message = (
-            f"⏰ Habit Reminder: <b>{habit.name}</b>\n\n"
-            f"Don't forget! Current streak: {habit.current_streak} 🔥\n"
+            f"\u23f0 Habit Reminder: <b>{habit.name}</b>\n\n"
+            f"Don't forget! Current streak: {habit.current_streak} \U0001f525\n"
             f"Reply with /log_habit {habit.id} to mark as done."
         )
-        
-        await bot.send_message(user.tg_chat_id, message)
-        await bot.session.close() # Close session
-        logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
+        try:
+            await bot.send_message(user.tg_chat_id, message)
+            logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
+        finally:
+            await bot.session.close()
     except Exception as e:
         logger.exception("Error in habit_reminder_job for habit {}: {}", habit_id, e)
         await session.rollback()
     finally:
         await session.close()
-        
+
+
 async def cleanup_expired_memories_job():
-    """
-    Cleanup episodes older than EPISODE_LIFETIME_DAYS and clear stale working memory.
-    Uses batch processing to avoid memory issues with large datasets.
-    """
+    """Cleanup episodes older than EPISODE_LIFETIME_DAYS and clear stale working memory."""
     logger.info("Running cleanup_expired_memories_job")
     session = AsyncSessionLocal()
-    BATCH_SIZE = 1000  # Process in batches to avoid OOM
-    
+    BATCH_SIZE = 1000
     try:
-        # Episodes: delete EpisodeEmbedding rows and Episode rows older than lifetime
         life_days = float(settings.EPISODE_LIFETIME_DAYS)
         cutoff = datetime.now(timezone.utc) - timedelta(days=life_days)
-
         total_deleted = 0
         while True:
-            # Fetch batch of expired episode IDs
             result = await session.execute(
-                select(Episode.id)
-                .where(Episode.created_at < cutoff)
-                .limit(BATCH_SIZE)
+                select(Episode.id).where(Episode.created_at < cutoff).limit(BATCH_SIZE)
             )
             expired_ids = [r for (r,) in result.all()]
-
             if not expired_ids:
-                break  # No more expired episodes
-
-            # Delete embeddings and episodes for this batch
-            await session.execute(
-                delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids))
-            )
-            await session.execute(
-                delete(Episode).where(Episode.id.in_(expired_ids))
-            )
+                break
+            await session.execute(delete(EpisodeEmbedding).where(EpisodeEmbedding.episode_id.in_(expired_ids)))
+            await session.execute(delete(Episode).where(Episode.id.in_(expired_ids)))
             await session.commit()
-            
             total_deleted += len(expired_ids)
             logger.info("Deleted batch of {} expired episodes (total: {})", len(expired_ids), total_deleted)
-            
-            # If we got fewer than BATCH_SIZE, we're done
             if len(expired_ids) < BATCH_SIZE:
                 break
-
         if total_deleted > 0:
             logger.info("Cleanup complete: deleted {} expired episodes total", total_deleted)
         else:
             logger.info("No expired episodes to delete")
 
-        # Working memory: Clear text for stale working memories instead of deleting the record
-        # This preserves the user's working memory structure while resetting the content
         result = await session.execute(
-            select(WorkingMemory.id, WorkingMemory.user_id)
-            .where(
-                WorkingMemory.decay_date != None, 
+            select(WorkingMemory.id, WorkingMemory.user_id).where(
+                WorkingMemory.decay_date != None,
                 WorkingMemory.decay_date <= datetime.now(timezone.utc).date()
             )
         )
         stale_wm = result.all()
-
         if stale_wm:
             stale_wm_ids = [wm_id for wm_id, _ in stale_wm]
-            
-            # Delete embeddings
-            await session.execute(
-                delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids))
-            )
-            
-            # Clear working memory text instead of deleting the record
-            # This allows the user to maintain their working memory structure
+            await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
             from sqlalchemy import update
             await session.execute(
-                update(WorkingMemory)
-                .where(WorkingMemory.id.in_(stale_wm_ids))
-                .values(
-                    working_memory_text=None,
-                    decay_date=None
-                )
+                update(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
+                .values(working_memory_text=None, decay_date=None)
             )
-            
             await session.commit()
             logger.info("Cleared {} stale working memories (preserved records)", len(stale_wm_ids))
         else:
             logger.info("No stale working memories found")
-            
     except Exception as e:
         logger.exception("Error during cleanup_expired_memories_job: {}", e)
         await session.rollback()
@@ -301,96 +194,53 @@ async def cleanup_expired_memories_job():
 
 
 async def archive_raw_conversations_job():
-    """
-    Archive raw conversation history from Redis to Episodes.
-    This prevents data loss when conversations exceed the Redis history limit
-    or when ExtractorService misses important information.
-    
-    Runs daily to create "Daily Chat Log" episodes for each active user.
-    """
+    """Archive raw conversation history from Redis to Episodes."""
     logger.info("Running archive_raw_conversations_job")
     session = AsyncSessionLocal()
-    
     try:
         from ..services.conversation_history_service import ConversationHistoryService
         from ..services.episodic_memory_service import EpisodicMemoryService
         from ..embeddings.gemini_embedding_client import GeminiEmbeddings
-        
-        # Get all users who have conversation history in Redis
+
         redis = ConversationHistoryService._get_redis_client()
-        
-        # Scan for all conversation history keys
         archived_count = 0
         async for key in redis.scan_iter(match="conversation_history:*", count=100):
             try:
-                # Extract chat_id from key
                 chat_id = int(key.split(":")[-1])
-                
-                # Get user by chat_id
-                result = await session.execute(
-                    select(User).where(User.tg_chat_id == chat_id)
-                )
+                result = await session.execute(select(User).where(User.tg_chat_id == chat_id))
                 user = result.scalar_one_or_none()
-                
                 if not user:
-                    logger.warning("No user found for chat_id {}", chat_id)
                     continue
-                
-                # Get conversation history
                 history = await ConversationHistoryService.get_history(chat_id)
-                
-                if not history or len(history) < 3:  # Skip if too short
+                if not history or len(history) < 3:
                     continue
-                
-                # Create summary of the conversation
                 conversation_text = "\n".join([
                     f"{msg['role'].upper()}: {msg['content']}"
-                    for msg in history
-                    if msg.get('content')
+                    for msg in history if msg.get('content')
                 ])
-                
-                # Check if we already archived today
                 today = datetime.now(timezone.utc).date()
                 result = await session.execute(
-                    select(Episode)
-                    .where(
+                    select(Episode).where(
                         Episode.user_id == user.id,
                         Episode.created_at >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
                         Episode.text.like("%Daily Chat Archive%")
                     )
                 )
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    logger.debug("Already archived conversation for user {} today", user.id)
+                if result.scalar_one_or_none():
                     continue
-                
-                # Create episode with archived conversation
                 archive_text = (
-                    f"Daily Chat Archive ({today.isoformat()}):\n\n"
-                    f"{conversation_text}\n\n"
-                    f"[This is an automatic archive of raw conversation history]"
+                    f"Daily Chat Archive ({today.isoformat()}):\n\n{conversation_text}\n\n"
+                    "[This is an automatic archive of raw conversation history]"
                 )
-                
-                # Store as episode
-                embeddings = GeminiEmbeddings()
-                episodic_service = EpisodicMemoryService(embeddings)
-                await episodic_service.store_episode(
-                    session=session,
-                    user_id=user.id,
-                    fact_text=archive_text
-                )
-                
+                episodic_service = EpisodicMemoryService(GeminiEmbeddings())
+                await episodic_service.store_episode(session=session, user_id=user.id, fact_text=archive_text)
                 archived_count += 1
                 logger.info("Archived conversation for user {} (chat_id: {})", user.id, chat_id)
-                
             except Exception as e:
                 logger.exception("Error archiving conversation for key {}: {}", key, e)
                 continue
-        
         await session.commit()
         logger.info("Archived {} conversations total", archived_count)
-        
     except Exception as e:
         logger.exception("Error during archive_raw_conversations_job: {}", e)
         await session.rollback()

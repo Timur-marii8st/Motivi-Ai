@@ -70,8 +70,8 @@ async def handle_chat(message: Message, session):
         except Exception as e:
             logger.warning("Failed to get time in zone for user {}: {}", user.id, e)
             # Fallback to UTC time
-            from datetime import datetime, timezone
-            user_time = datetime.now(timezone.utc).isoformat()
+            from datetime import datetime, timezone as _tz
+            user_time = datetime.now(_tz.utc).isoformat()
             
         time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
         user_text = f"{user_text}\n\n{time_block}"
@@ -96,7 +96,7 @@ async def handle_chat(message: Message, session):
             has_important_info = await extractor_service.find_write_important_info(user.id, session, info_text)
             logger.info("Important info extraction for user {}: {}", user.id, has_important_info)
         except Exception as e:
-            logger.exception("Failed to store episode for user %s: %s", user.id, e)
+            logger.exception("Failed to store episode for user {}: {}", user.id, e)
 
         try:
             await fact_cleanup_service.clear_duplicate_facts(session, user.id)
@@ -105,9 +105,9 @@ async def handle_chat(message: Message, session):
             if "The truth value of an array with more than one element is ambiguous" in str(e):
                 logger.error(f"Numpy array truth value error in clear_duplicate_facts for user {user.id}: {e}")
             else:
-                logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)
+                logger.exception("Failed to clear duplicate facts for user {}: {}", user.id, e)
         except Exception as e:
-            logger.exception("Failed to clear duplicate facts for user %s: %s", user.id, e)
+            logger.exception("Failed to clear duplicate facts for user {}: {}", user.id, e)
     
     finally:
         # Always remove the thinking message, even if an error occurred

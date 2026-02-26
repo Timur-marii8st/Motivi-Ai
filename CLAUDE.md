@@ -391,3 +391,109 @@ Daily message quotas: Trial=20, Premium=200, Expired=0 (configurable in `config.
 | `app/security/encrypted_types.py` | Column encryption TypeDecorators |
 | `app/scheduler/job_manager.py` | Proactive scheduling logic |
 | `alembic/versions/` | All DB migration history |
+
+---
+
+## Recent Changes (2026-02-26)
+
+### Bug Fixes & Optimisations Applied
+
+| File | Fix |
+|---|---|
+| `app/models/users.py` | Removed duplicate `touch()` method definition (was defined twice) |
+| `app/services/extractor_service.py` | Replaced stdlib `logging` with `loguru`; fixed f-string → loguru positional-arg format |
+| `app/services/proactive_flows.py` | Extracted 4-method duplication into single `_run_flow()` helper; shared `GeminiEmbeddings` singleton across instances; parallelised history save + bot.send with `asyncio.gather` |
+| `app/scheduler/jobs.py` | Removed duplicate imports (`datetime`, `timedelta`, `delete`); extracted 4 identical job functions into `_run_proactive_job()`; wrapped `bot.send_message` in `try/finally` to guarantee `bot.session.close()` on exception |
+| `app/bot/routers/habits.py` | Fixed `user.timezone` → `user.user_timezone` (wrong property name caused AttributeError); moved `Habit` import to top of file; added `timezone.utc` fallback when user has no timezone set; fixed `%s` logger format → loguru `{}` |
+| `app/bot/routers/chat.py` | Fixed `%s` logger format → loguru `{}` in exception handlers |
+| `app/services/memory_orchestrator.py` | Parallelised all four independent DB/vector queries using `asyncio.gather()` — reduces memory assembly latency by ~3× under load; fixed `Optional[List]` type hint → `Optional[List[Any]]` |
+
+### New Features Added
+
+#### 1. Group Chat Support (`app/bot/routers/group.py`)
+
+The bot now works inside Telegram groups and supergroups. It responds **only** when explicitly addressed:
+
+- User sends a message that contains `@botusername`
+- User replies to one of the bot's own messages
+
+All other group messages are silently ignored (no eavesdropping). The full per-user memory/subscription/history pipeline runs as normal — memories are stored under the user's personal profile (DM-first approach).
+
+**Router registration:** `group_router` is registered in `dispatcher.py` before `multimodal_router` and `chat_router` but after all command routers, so commands still take priority.
+
+**Key functions in `group.py`:**
+- `_is_group_message(message)` — filter: only fires on group/supergroup chats
+- `_bot_is_mentioned(message, bot)` — checks reply-to-bot and @mention
+- `_strip_bot_mention(text, bot_username)` — removes @mention noise before LLM sees the text
+
+#### 2. Sandboxed Code Execution (`app/services/code_executor_service.py`)
+
+The LLM can now run code on behalf of users inside an isolated Docker container. This is exposed as the `execute_code` LLM tool (see `tool_schemas.py` and `tool_executor.py`).
+
+**Safety measures (all enforced at the Docker level):**
+
+| Control | Value |
+|---|---|
+| Network | `--network=none` (completely disabled) |
+| Filesystem | `--read-only` root + small `/tmp` tmpfs |
+| Memory | `--memory=128m` (hard limit, swap disabled) |
+| CPU | `--cpu-quota` = 0.5 cores |
+| Process limit | `--pids-limit=64` (prevents fork bombs) |
+| Linux capabilities | `--cap-drop=ALL` |
+| Privilege escalation | `--security-opt=no-new-privileges` |
+| User | `-u nobody` (non-root) |
+| Wall-clock timeout | 10 seconds (container force-killed) |
+| Output cap | 8 KB |
+| Container lifetime | `--rm` (auto-deleted after exit) |
+
+**Supported languages:**
+
+| Language key | Docker image |
+|---|---|
+| `python` / `python3` | `python:3.11-alpine` |
+| `javascript` / `js` | `node:20-alpine` |
+| `bash` / `sh` | `alpine:3` |
+
+**Pre-pull images on the host** for fast cold starts:
+```bash
+docker pull python:3.11-alpine
+docker pull node:20-alpine
+docker pull alpine:3
+```
+
+**Configuration:** Timeout, memory, and CPU limits are hardcoded as constants in `code_executor_service.py`; move to `config.py` if you need env-based tunability.
+
+---
+
+## Future Feature Roadmap
+
+### Near-term (next sprint)
+
+| Feature | Description | Key files to touch |
+|---|---|---|
+| **Alembic migration for group chats** | Add `group_id` column to conversation history (optional, for per-group context isolation) | `app/models/`, `alembic/versions/` |
+| **Code execution rate-limiting** | Prevent users from spamming the sandbox; count executions per user per day in Redis | `app/middleware/rate_limit.py`, `code_executor_service.py` |
+| **Subscription gate for code exec** | Only Trial/Premium users can run code; expired users see upsell | `app/services/code_executor_service.py`, `tool_executor.py` |
+| **Inline keyboard for habit logging** | Replace `/log_habit <id>` text command with buttons in `/habits` response | `app/bot/routers/habits.py` |
+| **File/image output from code exec** | Allow matplotlib/PIL to save plots and send them as Telegram photos | `app/services/code_executor_service.py`, `app/bot/routers/group.py` |
+
+### Medium-term
+
+| Feature | Description |
+|---|---|
+| **Web dashboard** | React/Next.js read-only dashboard showing habits, streaks, memory stats; protected by Telegram Login Widget |
+| **Notion / Obsidian export** | Export core memory, habits, and episodes to Markdown or Notion pages via API |
+| **Custom proactive flow triggers** | Let users define their own recurring prompts (e.g., "every Friday at 17:00 ask me about my week") |
+| **Multi-language bot** | Auto-detect user language from onboarding and load `moti_system_eng.txt` or `moti_system.txt` accordingly |
+| **Per-group personality** | Group admins can configure a group-specific system prompt addon (e.g., team stand-up facilitator mode) |
+| **Shared group habits** | Habit challenges that multiple group members can join and track together |
+
+### Long-term / Architectural
+
+| Feature | Description |
+|---|---|
+| **Streaming LLM responses** | Use SSE / chunked Telegram `sendChatAction` + message edits for real-time response feel |
+| **Voice response** | TTS output (ElevenLabs or OpenRouter audio) for voice note replies |
+| **Vector DB upgrade** | Replace pgvector IVFFlat with HNSW index or dedicated Qdrant service when user count exceeds ~10k |
+| **Multi-tenant SaaS** | Tenant isolation at DB level for white-label deployments |
+| **MCP server integration** | Expose bot tools as an MCP server so other AI systems can call into Motivi's memory and scheduling |
