@@ -60,7 +60,11 @@ class ConversationService:
         context_dict = memory_pack.to_context_dict()
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
         persona = self._get_persona(language)
-        system_instruction = f"{persona}\n\n{context_block}"
+
+        from ..services.skills_service import SkillsService
+        skills_snippet = SkillsService.get_skills_prompt_snippet()
+
+        system_instruction = f"{persona}\n\n{context_block}{skills_snippet}"
         
         # 1. Prepare Messages
         # Always start with fresh system message (contains current memory context)

@@ -174,6 +174,28 @@ TOOL_EXECUTE_CODE = {
     },
 }
 
+TOOL_LOAD_SKILL = {
+    "name": "load_skill",
+    "description": (
+        "Load detailed step-by-step instructions for a specialist skill. "
+        "Call this BEFORE attempting any task that matches an available skill listed in the system prompt. "
+        "The returned instructions contain working code patterns and best practices — "
+        "use them to guide the subsequent execute_code call. "
+        "Do not attempt skill-based tasks from memory; always load the skill first."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Exact skill name as listed in the 'Available Skills' section of the system prompt.",
+            },
+        },
+        "required": ["name"],
+    },
+}
+
+
 RAW_TOOLS = [
     TOOL_SCHEDULE_REMINDER,
     TOOL_CANCEL_REMINDER,
@@ -184,6 +206,7 @@ RAW_TOOLS = [
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
     TOOL_EXECUTE_CODE,
+    TOOL_LOAD_SKILL,
 ]
 
 ALL_TOOLS = [_to_openai_tool(t) for t in RAW_TOOLS]

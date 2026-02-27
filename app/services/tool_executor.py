@@ -32,6 +32,8 @@ class ToolExecutor:
                 return await self._check_availability(args, user_id)
             elif tool_name == "execute_code":
                 return await self._execute_code(args, chat_id, user_id)
+            elif tool_name == "load_skill":
+                return await self._load_skill(args)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -508,4 +510,25 @@ class ToolExecutor:
                 result_dict["output_files_failed"] = failed_files
 
         return result_dict
+
+    async def _load_skill(self, args: dict) -> dict:
+        """Load and return the full instructions for a named Agent Skill."""
+        from ..services.skills_service import SkillsService
+
+        name = args.get("name", "").strip()
+        if not name:
+            return {"success": False, "error": "name is required"}
+
+        content = SkillsService.get_skill_content(name)
+        if content is None:
+            available = SkillsService.get_available_names()
+            return {
+                "success": False,
+                "error": (
+                    f"Skill '{name}' not found. "
+                    f"Available skills: {', '.join(available) if available else 'none installed'}"
+                ),
+            }
+
+        return {"success": True, "skill_name": name, "instructions": content}
 
