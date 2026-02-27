@@ -8,6 +8,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..services.memory_orchestrator import MemoryPack
+from ..services.skills_service import SkillsService
 from .tool_schemas import ALL_TOOLS
 from ..services.tool_executor import ToolExecutor
 from ..services.profile_completeness_service import ProfileCompletenessService
@@ -61,7 +62,6 @@ class ConversationService:
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
         persona = self._get_persona(language)
 
-        from ..services.skills_service import SkillsService
         skills_snippet = SkillsService.get_skills_prompt_snippet()
 
         system_instruction = f"{persona}\n\n{context_block}{skills_snippet}"
