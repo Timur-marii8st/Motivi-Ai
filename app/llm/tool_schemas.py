@@ -148,7 +148,10 @@ TOOL_EXECUTE_CODE = {
         "    prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[0])\n"
         "    slide.shapes.title.text = 'My Slide'; prs.save('/output/slides.pptx')\n\n"
         "Sandbox constraints: no network access, 30-second timeout, 256 MB memory, read-only root FS. "
-        "Do NOT use for malicious, harmful, or privacy-violating code."
+        "Do NOT use for malicious, harmful, or privacy-violating code.\n\n"
+        "When output_files_sent is present in the tool result, the files have already been delivered "
+        "to the user as Telegram messages. In your reply just reference the filename(s) — "
+        "do NOT repeat or describe their contents."
     ),
     "parameters": {
         "type": "object",

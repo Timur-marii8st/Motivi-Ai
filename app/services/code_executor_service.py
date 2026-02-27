@@ -222,6 +222,7 @@ class CodeExecutorService:
         run_cmd: str,
         memory_mb: int,
         cpu_quota: float,
+        container_name: str,
         output_host_dir: str | None = None,
     ) -> list[str]:
         """Build the docker run command with all safety flags."""
@@ -231,11 +232,12 @@ class CodeExecutorService:
         cmd = [
             "docker", "run",
             "--rm",
+            f"--name={container_name}",  # named so we can force-kill on timeout
             "--network=none",
             "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m",
             f"--memory={memory_mb}m",
-            "--memory-swap=-1",
+            f"--memory-swap={memory_mb}m",  # same value = no swap allowed
             f"--cpu-period={cpu_period}",
             f"--cpu-quota={cpu_quota_us}",
             "--cap-drop=ALL",
@@ -297,6 +299,9 @@ class CodeExecutorService:
         image, run_cmd = _LANGUAGE_CONFIG[lang_key]
         supports_file_output = lang_key in _FILE_OUTPUT_LANGUAGES
 
+        # Unique container name allows explicit force-kill on timeout
+        container_name = f"motivi-exec-{uuid.uuid4().hex[:12]}"
+
         # Create isolated per-execution output directory on host
         output_host_dir: str | None = None
         if supports_file_output:
@@ -309,12 +314,12 @@ class CodeExecutorService:
                 output_host_dir = None
 
         docker_cmd = self._build_docker_cmd(
-            image, run_cmd, memory_mb, cpu_quota, output_host_dir
+            image, run_cmd, memory_mb, cpu_quota, container_name, output_host_dir
         )
 
         logger.info(
-            "Executing {} code in sandbox (len={} chars, timeout={}s, file_output={})",
-            language, len(code), timeout, output_host_dir is not None,
+            "Executing {} code in sandbox (container={}, len={} chars, timeout={}s, file_output={})",
+            language, container_name, len(code), timeout, output_host_dir is not None,
         )
 
         timed_out = False
@@ -334,11 +339,25 @@ class CodeExecutorService:
                 )
             except asyncio.TimeoutError:
                 timed_out = True
-                logger.warning("Code execution timed out after {}s, killing container", timeout)
+                logger.warning(
+                    "Code execution timed out after {}s, force-killing container {}",
+                    timeout, container_name,
+                )
+                # Kill the docker CLI process
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
+                # Force-kill the container via Docker daemon (belt-and-suspenders)
+                try:
+                    kill_proc = await asyncio.create_subprocess_exec(
+                        "docker", "kill", container_name,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await asyncio.wait_for(kill_proc.wait(), timeout=5.0)
+                except Exception:
+                    pass  # container may have already exited
                 stdout_bytes, stderr_bytes = b"", b"Execution timed out."
                 await proc.wait()
 
