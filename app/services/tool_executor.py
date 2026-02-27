@@ -31,7 +31,7 @@ class ToolExecutor:
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
             elif tool_name == "execute_code":
-                return await self._execute_code(args, user_id)
+                return await self._execute_code(args, chat_id, user_id)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -411,14 +411,24 @@ class ToolExecutor:
             # The session is shared with the handler
             return {"success": False, "error": str(e)}
 
-    async def _execute_code(self, args: dict, user_id: int) -> dict:
-        """Execute code in a sandboxed Docker container with subscription gate and rate limiting."""
+    async def _execute_code(self, args: dict, chat_id: int, user_id: int) -> dict:
+        """Execute code in a sandboxed Docker container with subscription gate and rate limiting.
+
+        For Python executions, any files saved to /output/ inside the container are
+        collected and sent directly to the user via Telegram (photos for images, documents
+        for everything else). The LLM receives a summary of what was sent.
+        """
         from datetime import datetime, timezone as _tz
+        from aiogram import Bot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.types import BufferedInputFile
         from ..services.code_executor_service import code_executor, SUPPORTED_LANGUAGES
         from ..services.subscription_service import SubscriptionService
         from ..services.conversation_history_service import ConversationHistoryService
         from ..models.users import User
         from ..config import settings
+
+        _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
         language = args.get("language", "").lower().strip()
         code = args.get("code", "").strip()
@@ -465,5 +475,37 @@ class ToolExecutor:
                 }
 
         result = await code_executor.run(language=language, code=code)
-        return result.to_dict()
+        result_dict = result.to_dict()
+
+        # Send any output files directly to the user via Telegram
+        if result.output_files:
+            bot = Bot(
+                token=settings.TELEGRAM_BOT_TOKEN,
+                default=DefaultBotProperties(parse_mode="HTML"),
+            )
+            sent_files: list[str] = []
+            failed_files: list[str] = []
+            try:
+                for fname, fdata in result.output_files:
+                    from pathlib import Path
+                    ext = Path(fname).suffix.lower()
+                    try:
+                        input_file = BufferedInputFile(fdata, filename=fname)
+                        if ext in _IMAGE_EXTENSIONS:
+                            await bot.send_photo(chat_id, input_file)
+                        else:
+                            await bot.send_document(chat_id, input_file)
+                        sent_files.append(fname)
+                        logger.info("Sent output file {} to chat {}", fname, chat_id)
+                    except Exception as e:
+                        logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
+                        failed_files.append(fname)
+            finally:
+                await bot.session.close()
+
+            result_dict["output_files_sent"] = sent_files
+            if failed_files:
+                result_dict["output_files_failed"] = failed_files
+
+        return result_dict
 

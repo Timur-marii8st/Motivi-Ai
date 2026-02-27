@@ -121,10 +121,34 @@ TOOL_EXECUTE_CODE = {
     "name": "execute_code",
     "description": (
         "Execute a code snippet in an isolated sandbox and return the output. "
-        "Use this when the user asks you to run code, compute something, validate logic, "
-        "or demonstrates a programming concept. Supported languages: python, javascript, bash. "
-        "All executions are sandboxed: no network access, strict memory and CPU limits, "
-        "10-second timeout. Do NOT use for malicious, harmful, or privacy-violating code."
+        "Use this when the user asks you to run code, compute something, generate charts, "
+        "create documents (Word/Excel/PowerPoint), or demonstrates a programming concept.\n\n"
+        "Supported languages: python, javascript, bash.\n\n"
+        "PYTHON FILE OUTPUT — saves files the user receives automatically:\n"
+        "  Save any file to /output/ inside the sandbox and it will be sent to the user via Telegram.\n"
+        "  Always use /output/ paths — do NOT use plt.show() or open files elsewhere.\n\n"
+        "  Pre-installed Python libraries (no pip needed):\n"
+        "    matplotlib, numpy, pandas, scipy, seaborn  — charts & data analysis\n"
+        "    python-docx   — create Word (.docx) files\n"
+        "    openpyxl      — create Excel (.xlsx) spreadsheets\n"
+        "    python-pptx   — create PowerPoint (.pptx) presentations\n"
+        "    Pillow        — image creation and manipulation\n\n"
+        "  Examples:\n"
+        "    # Matplotlib chart → PNG sent as photo\n"
+        "    import matplotlib.pyplot as plt\n"
+        "    plt.plot([1, 2, 3]); plt.savefig('/output/chart.png')\n\n"
+        "    # Word document sent as .docx file\n"
+        "    from docx import Document\n"
+        "    doc = Document(); doc.add_paragraph('Hello'); doc.save('/output/report.docx')\n\n"
+        "    # Excel spreadsheet sent as .xlsx file\n"
+        "    from openpyxl import Workbook\n"
+        "    wb = Workbook(); ws = wb.active; ws['A1'] = 'Data'; wb.save('/output/data.xlsx')\n\n"
+        "    # PowerPoint presentation sent as .pptx file\n"
+        "    from pptx import Presentation\n"
+        "    prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[0])\n"
+        "    slide.shapes.title.text = 'My Slide'; prs.save('/output/slides.pptx')\n\n"
+        "Sandbox constraints: no network access, 30-second timeout, 256 MB memory, read-only root FS. "
+        "Do NOT use for malicious, harmful, or privacy-violating code."
     ),
     "parameters": {
         "type": "object",
@@ -136,7 +160,11 @@ TOOL_EXECUTE_CODE = {
             },
             "code": {
                 "type": "string",
-                "description": "The source code to execute. Keep it concise and purposeful.",
+                "description": (
+                    "The source code to execute. "
+                    "For Python file output, save files to /output/ (e.g. plt.savefig('/output/chart.png')). "
+                    "Never call plt.show() — use savefig instead."
+                ),
             },
         },
         "required": ["language", "code"],
