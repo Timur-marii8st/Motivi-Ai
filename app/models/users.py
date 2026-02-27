@@ -83,10 +83,7 @@ class User(SQLModel, table=True):
         """Check if user is within the 7-day trial period."""
         if self.is_premium:
             return False
-        
+
         # Trial expires TRIAL_DAYS after creation
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.TRIAL_DAYS)
         return self.created_at > cutoff
-
-    def touch(self) -> None:
-        self.updated_at = datetime.now(timezone.utc)

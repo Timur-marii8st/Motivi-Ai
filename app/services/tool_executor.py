@@ -30,6 +30,10 @@ class ToolExecutor:
                 return await self._create_calendar_event(args, user_id)
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
+            elif tool_name == "execute_code":
+                return await self._execute_code(args, chat_id, user_id)
+            elif tool_name == "load_skill":
+                return await self._load_skill(args)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -408,4 +412,123 @@ class ToolExecutor:
             # Don't rollback - let the caller/middleware handle transaction fate
             # The session is shared with the handler
             return {"success": False, "error": str(e)}
+
+    async def _execute_code(self, args: dict, chat_id: int, user_id: int) -> dict:
+        """Execute code in a sandboxed Docker container with subscription gate and rate limiting.
+
+        For Python executions, any files saved to /output/ inside the container are
+        collected and sent directly to the user via Telegram (photos for images, documents
+        for everything else). The LLM receives a summary of what was sent.
+        """
+        from datetime import datetime, timezone as _tz
+        from aiogram import Bot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.types import BufferedInputFile
+        from ..services.code_executor_service import code_executor, SUPPORTED_LANGUAGES
+        from ..services.subscription_service import SubscriptionService
+        from ..services.conversation_history_service import ConversationHistoryService
+        from ..models.users import User
+        from ..config import settings
+
+        _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+        language = args.get("language", "").lower().strip()
+        code = args.get("code", "").strip()
+
+        if not language:
+            return {"success": False, "error": "language is required"}
+        if not code:
+            return {"success": False, "error": "code is required"}
+        if language not in SUPPORTED_LANGUAGES:
+            return {
+                "success": False,
+                "error": f"Unsupported language '{language}'. Use one of: {', '.join(SUPPORTED_LANGUAGES)}",
+            }
+
+        # Subscription gate
+        user = await self.session.get(User, user_id)
+        if not user:
+            return {"success": False, "error": "User not found"}
+
+        status = await SubscriptionService.get_user_status(user)
+        if status == "expired":
+            return {
+                "success": False,
+                "error": "Code execution requires an active subscription. Use /subscribe to upgrade.",
+            }
+
+        # Rate limiting (skip for admins)
+        if status != "admin":
+            limit = (
+                settings.CODE_EXEC_DAILY_PREMIUM
+                if status == "premium"
+                else settings.CODE_EXEC_DAILY_TRIAL
+            )
+            redis = ConversationHistoryService._get_redis_client()
+            today_str = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+            counter_key = f"code_exec:{user_id}:{today_str}"
+            current_count = await redis.incr(counter_key)
+            if current_count == 1:
+                await redis.expire(counter_key, 86400 + 3600)
+            if current_count > limit:
+                return {
+                    "success": False,
+                    "error": f"Daily code execution limit reached ({limit}/day). Try again tomorrow.",
+                }
+
+        result = await code_executor.run(language=language, code=code)
+        result_dict = result.to_dict()
+
+        # Send any output files directly to the user via Telegram
+        if result.output_files:
+            bot = Bot(
+                token=settings.TELEGRAM_BOT_TOKEN,
+                default=DefaultBotProperties(parse_mode="HTML"),
+            )
+            sent_files: list[str] = []
+            failed_files: list[str] = []
+            try:
+                for fname, fdata in result.output_files:
+                    from pathlib import Path
+                    ext = Path(fname).suffix.lower()
+                    try:
+                        input_file = BufferedInputFile(fdata, filename=fname)
+                        if ext in _IMAGE_EXTENSIONS:
+                            await bot.send_photo(chat_id, input_file)
+                        else:
+                            await bot.send_document(chat_id, input_file)
+                        sent_files.append(fname)
+                        logger.info("Sent output file {} to chat {}", fname, chat_id)
+                    except Exception as e:
+                        logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
+                        failed_files.append(fname)
+            finally:
+                await bot.session.close()
+
+            result_dict["output_files_sent"] = sent_files
+            if failed_files:
+                result_dict["output_files_failed"] = failed_files
+
+        return result_dict
+
+    async def _load_skill(self, args: dict) -> dict:
+        """Load and return the full instructions for a named Agent Skill."""
+        from ..services.skills_service import SkillsService
+
+        name = args.get("name", "").strip()
+        if not name:
+            return {"success": False, "error": "name is required"}
+
+        content = SkillsService.get_skill_content(name)
+        if content is None:
+            available = SkillsService.get_available_names()
+            return {
+                "success": False,
+                "error": (
+                    f"Skill '{name}' not found. "
+                    f"Available skills: {', '.join(available) if available else 'none installed'}"
+                ),
+            }
+
+        return {"success": True, "skill_name": name, "instructions": content}
 

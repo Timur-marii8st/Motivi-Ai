@@ -106,6 +106,54 @@ class JobManager:
                 logger.info("Removed job {}", job_id)
 
     @staticmethod
+    async def schedule_user_triggers(session: AsyncSession, user: User):
+        """Schedule or reschedule all active custom triggers for a user."""
+        from ..models.user_trigger import UserTrigger
+        from sqlmodel import select
+
+        if not user.user_timezone:
+            logger.warning("User {} has no timezone; skipping trigger scheduling", user.id)
+            return
+
+        tz = ZoneInfo(user.user_timezone)
+
+        # Remove all existing trigger jobs for this user
+        for job in scheduler.get_jobs():
+            if job.id.startswith(f"trigger_{user.id}_"):
+                scheduler.remove_job(job.id)
+
+        # Schedule active triggers
+        result = await session.execute(
+            select(UserTrigger).where(
+                UserTrigger.user_id == user.id,
+                UserTrigger.active == True,  # noqa: E712
+            )
+        )
+        triggers = list(result.scalars().all())
+
+        for trigger in triggers:
+            job_id = f"trigger_{user.id}_{trigger.id}"
+            cron_kwargs: dict = dict(
+                hour=trigger.cron_hour,
+                minute=trigger.cron_minute,
+                timezone=tz,
+            )
+            if trigger.cron_weekdays:
+                cron_kwargs["day_of_week"] = trigger.cron_weekdays
+
+            scheduler.add_job(
+                func="app.scheduler.jobs:custom_trigger_job",
+                trigger=CronTrigger(**cron_kwargs),
+                id=job_id,
+                args=[user.id, trigger.id],
+                replace_existing=True,
+            )
+            logger.info(
+                "Scheduled custom trigger {} for user {} at {:02d}:{:02d}",
+                trigger.id, user.id, trigger.cron_hour, trigger.cron_minute,
+            )
+
+    @staticmethod
     async def schedule_habit_reminders(session: AsyncSession, user_id: int):
         """
         Schedule daily reminders for user's active habits with reminder_time set.

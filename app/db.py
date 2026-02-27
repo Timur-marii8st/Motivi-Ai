@@ -35,8 +35,8 @@ async def init_db() -> None:
     from .models.habit import Habit, HabitLog
     from .models.oauth_token import OAuthToken
     from .models.profile_completeness import ProfileCompleteness
-    from .models.habit import Habit, HabitLog
-    from .models.oauth_token import OAuthToken
+    from .models.plan import Plan
+    from .models.user_trigger import UserTrigger
 
     async with engine.begin() as conn:
         # Enable pgvector

@@ -20,3 +20,9 @@ class ProfileEdit(StatesGroup):
     wake_time = State()
     bed_time = State()
     goals = State()
+
+class TriggerCreation(StatesGroup):
+    name = State()
+    prompt = State()
+    schedule = State()
+    weekdays = State()

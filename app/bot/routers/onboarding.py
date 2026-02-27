@@ -202,6 +202,16 @@ async def finalize_onboarding(message: Message, state: FSMContext, session):
     from ...scheduler.job_manager import JobManager
 
     user_settings = await SettingsService.get_or_create(session, user.id)
+
+    # Detect and persist language preference from Telegram locale
+    lang_code = (message.from_user.language_code or "ru").lower()
+    lang = "en" if lang_code.startswith("en") else "ru"
+    prefs = user_settings.summary_preferences_json or {}
+    prefs["language"] = lang
+    user_settings.summary_preferences_json = prefs
+    user_settings.touch()
+    session.add(user_settings)
+
     await session.commit()
 
     JobManager.schedule_user_jobs(user, user_settings)

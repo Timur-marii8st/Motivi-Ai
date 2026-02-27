@@ -12,6 +12,13 @@ services:
     volumes:
       - .:/app
       - shared_files:/tmp/motivi_files
+      # Docker socket — required for sandboxed code execution (code_executor_service.py)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared temp directory for code execution file output.
+      # The app creates per-execution subdirs here; Docker mounts them into sandbox containers.
+      # Must be the SAME path on the host and inside the app container so that
+      # `-v /tmp/motivi_exec/UUID:/output` in `docker run` resolves correctly on the host.
+      - /tmp/motivi_exec:/tmp/motivi_exec
     command: >
       bash -lc "poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: unless-stopped

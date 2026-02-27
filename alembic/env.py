@@ -29,6 +29,7 @@ from app.models.habit import Habit, HabitLog  # noqa: F401
 from app.models.oauth_token import OAuthToken  # noqa: F401
 from app.models.profile_completeness import ProfileCompleteness  # noqa: F401
 from app.models.plan import Plan
+from app.models.user_trigger import UserTrigger  # noqa: F401
 
 target_metadata = SQLModel.metadata
 

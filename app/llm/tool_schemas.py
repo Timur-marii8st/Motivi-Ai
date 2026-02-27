@@ -116,6 +116,74 @@ TOOL_CHECK_AVAILABILITY = {
     },
 }
 
+
+TOOL_EXECUTE_CODE = {
+    "name": "execute_code",
+    "description": (
+        "Execute a code snippet in an isolated sandbox and return the output. "
+        "Use for running code, calculations, quick one-off plots, or logic demonstrations.\n\n"
+        "IMPORTANT — for Word documents, Excel spreadsheets, PowerPoint presentations, "
+        "data analysis charts, CVs, study plans, or project plans: "
+        "call load_skill(name) FIRST to get proper code patterns. "
+        "Only call execute_code after loading the relevant skill. "
+        "Available skills are listed in the system prompt under 'Available Skills'.\n\n"
+        "Supported languages: python, javascript, bash.\n\n"
+        "PYTHON FILE OUTPUT:\n"
+        "  Files saved to /output/ inside the sandbox are sent to the user automatically via Telegram.\n"
+        "  Always save to /output/ — never call plt.show().\n"
+        "  Quick example (simple inline chart — no skill needed for this):\n"
+        "    import matplotlib; matplotlib.use('Agg')\n"
+        "    import matplotlib.pyplot as plt\n"
+        "    plt.plot([1, 2, 3, 4]); plt.title('Chart')\n"
+        "    plt.savefig('/output/chart.png'); plt.close()\n\n"
+        "Sandbox: no network, 30s timeout, 256 MB RAM, read-only root FS. "
+        "Do NOT use for malicious, harmful, or privacy-violating code.\n\n"
+        "When output_files_sent is in the tool result, files were already delivered to the user. "
+        "In your reply just mention the filename(s) — do NOT describe their contents."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "language": {
+                "type": "string",
+                "enum": ["python", "javascript", "bash"],
+                "description": "Programming language of the code snippet.",
+            },
+            "code": {
+                "type": "string",
+                "description": (
+                    "The source code to execute. "
+                    "For Python file output, save files to /output/ (e.g. plt.savefig('/output/chart.png')). "
+                    "Never call plt.show() — use savefig instead."
+                ),
+            },
+        },
+        "required": ["language", "code"],
+    },
+}
+
+TOOL_LOAD_SKILL = {
+    "name": "load_skill",
+    "description": (
+        "Load detailed step-by-step instructions for a specialist skill. "
+        "Call this BEFORE attempting any task that matches an available skill listed in the system prompt. "
+        "The returned instructions contain working code patterns and best practices — "
+        "use them to guide the subsequent execute_code call. "
+        "Do not attempt skill-based tasks from memory; always load the skill first."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Exact skill name as listed in the 'Available Skills' section of the system prompt.",
+            },
+        },
+        "required": ["name"],
+    },
+}
+
+
 RAW_TOOLS = [
     TOOL_SCHEDULE_REMINDER,
     TOOL_CANCEL_REMINDER,
@@ -125,6 +193,8 @@ RAW_TOOLS = [
     TOOL_EDIT_PLAN,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
+    TOOL_EXECUTE_CODE,
+    TOOL_LOAD_SKILL,
 ]
 
 ALL_TOOLS = [_to_openai_tool(t) for t in RAW_TOOLS]
