@@ -35,6 +35,8 @@ class UserSettings(SQLModel, table=True):
     enable_evening_wrapup: bool = Field(default=True)
     enable_weekly_plan: bool = Field(default=True)
     enable_monthly_plan: bool = Field(default=True)
+    # News digest: opt-in, fires NEWS_DIGEST_OFFSET_MINUTES after wake_time
+    enable_news_digest: bool = Field(default=False)
 
     # Summary content preferences
     summary_preferences_json: Optional[dict] = Field(

@@ -74,7 +74,21 @@ class Settings(BaseSettings):
     # Code Execution Daily Limits
     CODE_EXEC_DAILY_TRIAL: int = 5
     CODE_EXEC_DAILY_PREMIUM: int = 50
-    
+
+    # --- Web Search (Tavily) ---
+    TAVILY_API_KEY: str = ""
+    # Redis TTL (seconds) for caching identical search queries
+    SEARCH_CACHE_TTL: int = 3600
+    # Maximum results returned per search call (capped at 10 by Tavily free tier)
+    SEARCH_MAX_RESULTS: int = 5
+    # Daily search quota per user tier
+    SEARCH_DAILY_TRIAL: int = 10
+    SEARCH_DAILY_PREMIUM: int = 100
+
+    # --- News Digest ---
+    # Minutes after the user's wake_time at which the news digest fires
+    NEWS_DIGEST_OFFSET_MINUTES: int = 30
+
     @property
     def admin_ids(self) -> list[int]:
         if not self.ADMIN_USER_IDS:

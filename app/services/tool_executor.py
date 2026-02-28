@@ -34,6 +34,8 @@ class ToolExecutor:
                 return await self._execute_code(args, chat_id, user_id)
             elif tool_name == "load_skill":
                 return await self._load_skill(args)
+            elif tool_name == "web_search":
+                return await self._web_search(args, user_id)
             else:
                 logger.warning("Unknown tool: {}", tool_name)
                 return {"success": False, "error": "Unknown tool"}
@@ -510,6 +512,81 @@ class ToolExecutor:
                 result_dict["output_files_failed"] = failed_files
 
         return result_dict
+
+    async def _web_search(self, args: dict, user_id: int) -> dict:
+        """
+        Execute a web search via Tavily with subscription gate and rate limiting.
+        Returns structured results for the LLM to summarise.
+        """
+        from ..services.search_service import SearchService
+        from ..services.subscription_service import SubscriptionService
+        from ..models.users import User
+
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"success": False, "error": "query is required"}
+
+        num_results = int(args.get("num_results") or 5)
+        search_type = args.get("search_type") or "general"
+        if search_type not in ("general", "news"):
+            search_type = "general"
+
+        # Subscription gate
+        user = await self.session.get(User, user_id)
+        if not user:
+            return {"success": False, "error": "User not found"}
+
+        status = await SubscriptionService.get_user_status(user)
+        if status == "expired":
+            return {
+                "success": False,
+                "error": (
+                    "Web search requires an active subscription. "
+                    "Use /subscribe to upgrade."
+                ),
+            }
+
+        # Rate limiting (admins bypass)
+        allowed, count, limit = await SearchService.check_rate_limit(
+            user_id=user_id,
+            is_premium=(status == "premium"),
+            is_admin=(status == "admin"),
+        )
+        if not allowed:
+            return {
+                "success": False,
+                "error": (
+                    f"Daily search limit reached ({limit}/day). "
+                    "Try again tomorrow."
+                ),
+            }
+
+        results = await SearchService.search(
+            query=query,
+            num_results=num_results,
+            search_type=search_type,
+        )
+
+        if not results:
+            return {
+                "success": True,
+                "query": query,
+                "results": [],
+                "note": (
+                    "No results found. The search API may be unavailable "
+                    "or the query returned nothing."
+                ),
+            }
+
+        formatted = await SearchService.format_results_for_llm(results)
+        return {
+            "success": True,
+            "query": query,
+            "search_type": search_type,
+            "results": results,
+            "formatted": formatted,
+            "count": len(results),
+        }
 
     async def _load_skill(self, args: dict) -> dict:
         """Load and return the full instructions for a named Agent Skill."""

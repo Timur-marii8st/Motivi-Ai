@@ -59,6 +59,11 @@ async def monthly_plan_job(user_id: int):
     await _run_proactive_job(user_id, "monthly_plan")
 
 
+async def news_digest_job(user_id: int):
+    """Personalised news digest delivery (fires after wake_time + offset)."""
+    await _run_proactive_job(user_id, "news_digest")
+
+
 async def custom_trigger_job(user_id: int, trigger_id: int):
     """Execute a user-defined custom proactive trigger."""
     logger.info("Running custom trigger {} for user {}", trigger_id, user_id)

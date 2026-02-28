@@ -153,3 +153,50 @@ class ProactiveFlows:
         except Exception as e:
             logger.exception("Error generating monthly plan for user {}: {}", user.id, e)
             raise
+
+    async def news_digest(self, user: User):
+        """
+        Deliver a personalised news digest.
+
+        Fetches fresh news articles matched to the user's interests (from core
+        memory) via SearchService/NewsDigestService, then passes them to the
+        LLM through _run_flow so it can curate, comment, and summarise them
+        using the full user memory context.
+        """
+        logger.info("News digest for user {}", user.id)
+        try:
+            from .news_digest_service import NewsDigestService
+
+            digest_context = await NewsDigestService.build_digest_context(
+                session=self.session,
+                user=user,
+                num_topics=3,
+                results_per_topic=3,
+            )
+
+            if not digest_context:
+                logger.warning(
+                    "News digest: no articles found for user {} — skipping send",
+                    user.id,
+                )
+                return
+
+            prompt = (
+                "Here are today's fresh news articles personalised for me:\n\n"
+                f"{digest_context}\n\n"
+                "Please curate these results: pick the most relevant 4-6 articles "
+                "based on my interests and goals from memory, briefly summarise each "
+                "one (2-3 sentences), and add a short personal comment on why it "
+                "might matter to me. Group by topic if helpful. Be concise and engaging."
+            )
+
+            await self._run_flow(
+                user=user,
+                prompt=prompt,
+                greeting="\U0001f4f0 <b>Твой персональный дайджест новостей</b>",
+                top_k=5,
+            )
+            logger.info("News digest sent to user {}", user.id)
+        except Exception as e:
+            logger.exception("Error sending news digest to user {}: {}", user.id, e)
+            raise

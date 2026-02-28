@@ -21,12 +21,14 @@ async def settings_cmd(message: Message, session):
         f"• Morning check-in: {'✅ Enabled' if settings.enable_morning_checkin else '❌ Disabled'}\n"
         f"• Evening wrap-up: {'✅ Enabled' if settings.enable_evening_wrapup else '❌ Disabled'}\n"
         f"• Weekly plan: {'✅ Enabled' if settings.enable_weekly_plan else '❌ Disabled'}\n"
-        f"• Monthly plan: {'✅ Enabled' if settings.enable_monthly_plan else '❌ Disabled'}\n\n"
+        f"• Monthly plan: {'✅ Enabled' if settings.enable_monthly_plan else '❌ Disabled'}\n"
+        f"• News digest: {'✅ Enabled' if settings.enable_news_digest else '❌ Disabled'} "
+        f"(fires {30} min after wake time)\n\n"
         f"<b>Break Mode:</b>\n"
         f"• Status: {'🔕 Active' if settings.break_mode_active else '🔔 Inactive'}\n"
         f"• Until: {settings.break_mode_until.strftime('%Y-%m-%d %H:%M') if settings.break_mode_until else 'N/A'}\n"
     )
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"{'✅' if settings.enable_morning_checkin else '❌'} Morning Check-in",
@@ -43,6 +45,10 @@ async def settings_cmd(message: Message, session):
         [InlineKeyboardButton(
             text=f"{'✅' if settings.enable_monthly_plan else '❌'} Monthly Plan",
             callback_data="settings_toggle_monthly"
+        )],
+        [InlineKeyboardButton(
+            text=f"{'✅' if settings.enable_news_digest else '❌'} News Digest",
+            callback_data="settings_toggle_news_digest"
         )],
     ])
     
@@ -63,6 +69,8 @@ async def toggle_setting(callback: CallbackQuery, session):
         settings.enable_weekly_plan = not settings.enable_weekly_plan
     elif setting == "monthly":
         settings.enable_monthly_plan = not settings.enable_monthly_plan
+    elif setting == "news_digest":
+        settings.enable_news_digest = not settings.enable_news_digest
     
     settings.touch()
     session.add(settings)
