@@ -6,6 +6,7 @@ from loguru import logger
 from ...services.profile_services import get_or_create_user
 from ...services.settings_service import SettingsService
 from ...scheduler.job_manager import JobManager
+from ...config import settings as app_settings
 
 router = Router(name="settings")
 
@@ -23,7 +24,7 @@ async def settings_cmd(message: Message, session):
         f"• Weekly plan: {'✅ Enabled' if settings.enable_weekly_plan else '❌ Disabled'}\n"
         f"• Monthly plan: {'✅ Enabled' if settings.enable_monthly_plan else '❌ Disabled'}\n"
         f"• News digest: {'✅ Enabled' if settings.enable_news_digest else '❌ Disabled'} "
-        f"(fires {30} min after wake time)\n\n"
+        f"(fires {app_settings.NEWS_DIGEST_OFFSET_MINUTES} min after wake time)\n\n"
         f"<b>Break Mode:</b>\n"
         f"• Status: {'🔕 Active' if settings.break_mode_active else '🔔 Inactive'}\n"
         f"• Until: {settings.break_mode_until.strftime('%Y-%m-%d %H:%M') if settings.break_mode_until else 'N/A'}\n"

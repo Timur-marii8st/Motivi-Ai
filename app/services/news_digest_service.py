@@ -126,7 +126,7 @@ class NewsDigestService:
             from ..embeddings.gemini_embedding_client import GeminiEmbeddings
 
             core_service = CoreMemoryService(GeminiEmbeddings())
-            facts = await core_service.get_all_facts(session, user.id)
+            facts = await core_service.list_facts_for_user(session, user.id)
 
             for fact in facts[:30]:
                 if len(queries) >= num_topics:

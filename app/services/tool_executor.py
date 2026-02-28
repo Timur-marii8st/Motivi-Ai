@@ -578,7 +578,7 @@ class ToolExecutor:
                 ),
             }
 
-        formatted = await SearchService.format_results_for_llm(results)
+        formatted = SearchService.format_results_for_llm(results)
         return {
             "success": True,
             "query": query,

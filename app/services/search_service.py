@@ -151,7 +151,7 @@ class SearchService:
         return count <= limit, count, limit
 
     @classmethod
-    async def format_results_for_llm(cls, results: list[dict]) -> str:
+    def format_results_for_llm(cls, results: list[dict]) -> str:
         """
         Convert raw result dicts into a compact, LLM-readable text block.
         """
