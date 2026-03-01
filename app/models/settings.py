@@ -35,6 +35,16 @@ class UserSettings(SQLModel, table=True):
     enable_evening_wrapup: bool = Field(default=True)
     enable_weekly_plan: bool = Field(default=True)
     enable_monthly_plan: bool = Field(default=True)
+    # News digest: opt-in, fires NEWS_DIGEST_OFFSET_MINUTES after wake_time
+    enable_news_digest: bool = Field(default=False)
+
+    # --- User Bot (MTProto monitoring) ---
+    # Whether to send a notification when an interesting channel post arrives
+    enable_channel_monitoring: bool = Field(default=True)
+    # Whether to send a notification with reply suggestions for incoming DMs
+    enable_dm_notifications: bool = Field(default=True)
+    # Free-text description of topics the user finds interesting (fed to LLM filter)
+    userbot_channel_interests: Optional[str] = Field(default=None)
 
     # Summary content preferences
     summary_preferences_json: Optional[dict] = Field(

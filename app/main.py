@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()
     start_scheduler()
 
+    # Start MTProto userbot clients (read-only monitoring of connected accounts)
+    from .services.userbot_manager import UserBotManager
+    await UserBotManager.start_all(bot)
+
     webhook_url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook"
     await bot.set_webhook(url=webhook_url, secret_token=settings.TELEGRAM_WEBHOOK_SECRET)
     logger.info(f"Webhook set to {webhook_url}")
@@ -40,6 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # --- shutdown ---
+    from .services.userbot_manager import UserBotManager as _UBM
+    await _UBM.stop_all()
     shutdown_scheduler()
     try:
         await bot.delete_webhook()

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.users import User
 from ..models.settings import UserSettings
 from .scheduler_instance import scheduler
+from ..config import settings as app_settings
 
 class JobManager:
     """
@@ -26,7 +27,7 @@ class JobManager:
         tz = ZoneInfo(user.user_timezone)
         
         # Remove all existing jobs for this user first to avoid conflicts
-        for prefix in ["morning", "evening", "weekly", "monthly"]:
+        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest"]:
             job_id = f"{prefix}_{user.id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
@@ -96,10 +97,44 @@ class JobManager:
         else:
             logger.info("Monthly plan not scheduled for user {} (disabled)", user.id)
 
+        # News digest (wake_time + NEWS_DIGEST_OFFSET_MINUTES, if enabled and wake_time is set)
+        job_id = f"news_digest_{user.id}"
+        if settings.enable_news_digest and user.wake_time:
+            from datetime import datetime, timedelta
+
+            wake_dt = datetime.combine(datetime.today(), user.wake_time)
+            digest_dt = wake_dt + timedelta(
+                minutes=app_settings.NEWS_DIGEST_OFFSET_MINUTES
+            )
+            scheduler.add_job(
+                func="app.scheduler.jobs:news_digest_job",
+                trigger=CronTrigger(
+                    hour=digest_dt.hour,
+                    minute=digest_dt.minute,
+                    timezone=tz,
+                ),
+                id=job_id,
+                args=[user.id],
+                replace_existing=True,
+            )
+            logger.info(
+                "Scheduled news digest for user {} at {:02d}:{:02d} ({}m after wake at {})",
+                user.id,
+                digest_dt.hour,
+                digest_dt.minute,
+                app_settings.NEWS_DIGEST_OFFSET_MINUTES,
+                user.wake_time,
+            )
+        else:
+            logger.info(
+                "News digest not scheduled for user {} (disabled or wake_time not set)",
+                user.id,
+            )
+
     @staticmethod
     async def remove_user_jobs(user_id: int):
         """Remove all jobs for a user."""
-        for prefix in ["morning", "evening", "weekly", "monthly"]:
+        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest"]:
             job_id = f"{prefix}_{user_id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)

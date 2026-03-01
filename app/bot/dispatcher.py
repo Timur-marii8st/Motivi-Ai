@@ -20,6 +20,7 @@ from .routers.common import router as common_router
 from .routers.subscription import router as subscription_router
 from .routers.group import router as group_router
 from .routers.triggers import router as triggers_router
+from .routers.userbot import router as userbot_router
 
 def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -47,6 +48,7 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     dp.include_router(admin_router)
     dp.include_router(group_router)
     dp.include_router(triggers_router)
+    dp.include_router(userbot_router)
     dp.include_router(multimodal_router)
     dp.include_router(chat_router)
     dp.include_router(common_router)

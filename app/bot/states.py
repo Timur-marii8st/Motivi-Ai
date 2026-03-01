@@ -26,3 +26,9 @@ class TriggerCreation(StatesGroup):
     prompt = State()
     schedule = State()
     weekdays = State()
+
+class UserBotSetup(StatesGroup):
+    """FSM states for connecting a personal Telegram account (MTProto userbot)."""
+    waiting_phone = State()     # waiting for E.164 phone number
+    waiting_code = State()      # waiting for the OTP sent by Telegram
+    waiting_password = State()  # waiting for 2FA cloud password (if enabled)

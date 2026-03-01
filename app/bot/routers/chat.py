@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from aiogram import Router, F
 from aiogram.types import Message
 from loguru import logger
@@ -19,6 +20,26 @@ from ...utils.get_user_time import get_time_in_zone
 
 
 router = Router(name="chat")
+
+# ── Search token detection ──────────────────────────────────────────────────
+# Supported formats:
+#   !!<query>           — ultra-short (e.g.  !!bitcoin price)
+#   !search <query>     — explicit English trigger
+#   !поиск <query>      — explicit Russian trigger
+_SEARCH_PATTERNS = [
+    re.compile(r"^!!\s*(.+)", re.DOTALL),
+    re.compile(r"^!search\s+(.+)", re.DOTALL | re.IGNORECASE),
+    re.compile(r"^!поиск\s+(.+)", re.DOTALL | re.IGNORECASE),
+]
+
+def _extract_search_query(text: str) -> str | None:
+    """Return the search query if the message starts with a search token, else None."""
+    stripped = text.strip()
+    for pattern in _SEARCH_PATTERNS:
+        m = pattern.match(stripped)
+        if m:
+            return m.group(1).strip()
+    return None
 
 extractor_service = ExtractorService()
 gemini_embeddings = GeminiEmbeddings()
@@ -42,6 +63,24 @@ async def handle_chat(message: Message, session):
         return
 
     user_text = message.text.strip()
+
+    # ── Search token handling ──────────────────────────────────────────
+    # Detect !! / !search / !поиск prefix and inject a mandatory search
+    # instruction so the LLM calls web_search as its very first action.
+    search_query = _extract_search_query(user_text)
+    forced_tool_choice = None
+    if search_query:
+        # Strip the token so the LLM doesn't see the raw !! syntax
+        user_text = search_query
+        # Append a directive the LLM will read in the system context block
+        user_text = (
+            f"{search_query}\n\n"
+            "<SearchDirective>The user has explicitly requested a web search. "
+            "You MUST call the web_search tool immediately with the query above "
+            "before composing your reply. Do not skip this step.</SearchDirective>"
+        )
+        forced_tool_choice = {"type": "function", "function": {"name": "web_search"}}
+        logger.info("Search token detected for user {}; query='{}'", user.id, search_query)
 
     # Send an immediate "thinking" message and keep reference so we can delete it later
     thinking_message = None
@@ -93,6 +132,7 @@ async def handle_chat(message: Message, session):
             session,
             conversation_history=history,
             language=language,
+            forced_tool_choice=forced_tool_choice,
         )
 
         await message.answer(reply)

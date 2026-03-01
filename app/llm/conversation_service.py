@@ -52,6 +52,7 @@ class ConversationService:
         conversation_history: Optional[List[dict]] = None,
         max_iterations: int = 5,
         language: str = "ru",
+        forced_tool_choice: Optional[Any] = None,
     ) -> Tuple[str, List[dict]]:
         """
         Generate a response with potential tool calls using the OpenAI compatible API.
@@ -88,12 +89,19 @@ class ConversationService:
             while iteration < max_iterations:
                 iteration += 1
                 logger.debug(f"ReAct iteration {iteration}/{max_iterations}")
-                
+
+                # forced_tool_choice applies only on the first iteration so the
+                # LLM is free to follow up with any tool (or none) afterwards.
+                effective_tool_choice = (
+                    forced_tool_choice if (forced_tool_choice and iteration == 1)
+                    else "auto"
+                )
+
                 response = await self.client.chat.completions.create(
                     model=settings.LLM_MODEL_ID,
                     messages=messages,
                     tools=ALL_TOOLS,
-                    tool_choice="auto", 
+                    tool_choice=effective_tool_choice,
                     temperature=0.7,
                     max_tokens=4000
                 )

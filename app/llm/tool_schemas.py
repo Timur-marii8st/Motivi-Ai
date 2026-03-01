@@ -162,6 +162,45 @@ TOOL_EXECUTE_CODE = {
     },
 }
 
+TOOL_WEB_SEARCH = {
+    "name": "web_search",
+    "description": (
+        "Search the web for up-to-date information, facts, news, or any topic "
+        "that may be beyond your training data or requires current data.\n\n"
+        "Use this tool when:\n"
+        "• The user explicitly requests a web search (!! or !search prefix)\n"
+        "• The question involves recent events, prices, live data, or rapidly changing info\n"
+        "• You need to verify a fact you are not certain about\n\n"
+        "After receiving results, always synthesise and summarise them in the context of "
+        "what the user needs — do not dump raw URLs. Cite sources inline."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Concise, specific search query. Refine the user's request into an "
+                    "effective search string. Example: 'Python asyncio best practices 2025'."
+                ),
+            },
+            "num_results": {
+                "type": "integer",
+                "description": "Number of results to fetch (1–10). Default: 5.",
+            },
+            "search_type": {
+                "type": "string",
+                "enum": ["general", "news"],
+                "description": (
+                    "'general' for web search, 'news' for recent news articles. "
+                    "Default: 'general'."
+                ),
+            },
+        },
+        "required": ["query"],
+    },
+}
+
 TOOL_LOAD_SKILL = {
     "name": "load_skill",
     "description": (
@@ -195,6 +234,7 @@ RAW_TOOLS = [
     TOOL_CHECK_AVAILABILITY,
     TOOL_EXECUTE_CODE,
     TOOL_LOAD_SKILL,
+    TOOL_WEB_SEARCH,
 ]
 
 ALL_TOOLS = [_to_openai_tool(t) for t in RAW_TOOLS]
