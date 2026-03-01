@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     # Minutes after the user's wake_time at which the news digest fires
     NEWS_DIGEST_OFFSET_MINUTES: int = 30
 
+    # --- Telegram User Bot (MTProto via Telethon) ---
+    # Get these from https://my.telegram.org/apps
+    TELEGRAM_API_ID: int = 0
+    TELEGRAM_API_HASH: str = ""
+    # Max notifications per channel per user per day (anti-flood)
+    USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY: int = 5
+
     @property
     def admin_ids(self) -> list[int]:
         if not self.ADMIN_USER_IDS:
