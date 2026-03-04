@@ -1,6 +1,7 @@
 from __future__ import annotations
+import asyncio
+import os
 import tempfile
-import subprocess
 from aiogram import Router, F
 from aiogram.types import Message, Voice, PhotoSize
 from loguru import logger
@@ -15,7 +16,6 @@ from ...services.core_memory_service import CoreMemoryService
 from ...services.working_memory_service import WorkingMemoryService
 from ...embeddings.gemini_embedding_client import GeminiEmbeddings
 from ...services.tool_executor import ToolExecutor
-from ...config import settings
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.extractor_service import ExtractorService
 
@@ -46,6 +46,8 @@ async def handle_voice(message: Message, session):
     voice: Voice = message.voice
     file = await message.bot.get_file(voice.file_id)
     
+    ogg_path: str | None = None
+    wav_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_tmp:
             ogg_path = ogg_tmp.name
@@ -57,12 +59,15 @@ async def handle_voice(message: Message, session):
             
             # Use ffmpeg to convert OGG to WAV
             try:
-                subprocess.run(
-                    ["ffmpeg", "-i", ogg_path, "-acodec", "pcm_s16le", "-ar", "16000", wav_path, "-y"],
-                    check=True,
-                    capture_output=True
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-i", ogg_path, "-acodec", "pcm_s16le", "-ar", "16000", wav_path, "-y",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                _, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    raise RuntimeError(stderr.decode("utf-8", errors="replace")[:500])
+            except (FileNotFoundError, RuntimeError) as e:
                 logger.warning("ffmpeg conversion failed, trying to transcribe OGG directly: {}", e)
                 wav_path = ogg_path  # Fallback to OGG
             
@@ -80,7 +85,7 @@ async def handle_voice(message: Message, session):
             # Process as text
             memory_pack = await memory_orchestrator.assemble(session, user, transcript, top_k=5)
             
-            tool_executor = ToolExecutor(session)
+            tool_executor = ToolExecutor(session, bot=message.bot)
             
             response, updated_history = await conversation_service.respond_with_tools(
                 transcript,
@@ -107,6 +112,13 @@ async def handle_voice(message: Message, session):
     except Exception as e:
         logger.exception("Voice processing failed: {}", e)
         await message.answer("Упс, при обработке голосового сообщения произошла ошибка. Попробуй позже.")
+    finally:
+        for path in (wav_path, ogg_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 @router.message(F.photo)

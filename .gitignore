@@ -7,6 +7,7 @@ __pycache__/
 *.pyo
 *.lock
 .lock
+*.lock
 
 .vscode/
 .idea/

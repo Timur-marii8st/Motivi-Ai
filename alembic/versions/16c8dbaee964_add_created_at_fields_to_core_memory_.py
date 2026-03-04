@@ -21,8 +21,6 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade schema."""
     from datetime import datetime, timezone
-    # op.drop_index(op.f('ix_apscheduler_jobs_next_run_time'), table_name='apscheduler_jobs')
-    # op.drop_table('apscheduler_jobs')
     op.drop_index(op.f('ix_tasks_due_dt'), table_name='tasks')
     op.drop_index(op.f('ix_tasks_status'), table_name='tasks')
     op.drop_index(op.f('ix_tasks_user_id'), table_name='tasks')
@@ -63,11 +61,4 @@ def downgrade() -> None:
     op.create_index(op.f('ix_tasks_user_id'), 'tasks', ['user_id'], unique=False)
     op.create_index(op.f('ix_tasks_status'), 'tasks', ['status'], unique=False)
     op.create_index(op.f('ix_tasks_due_dt'), 'tasks', ['due_dt'], unique=False)
-    op.create_table('apscheduler_jobs',
-    sa.Column('id', sa.VARCHAR(length=191), autoincrement=False, nullable=False),
-    sa.Column('next_run_time', sa.DOUBLE_PRECISION(precision=53), autoincrement=False, nullable=True),
-    sa.Column('job_state', postgresql.BYTEA(), autoincrement=False, nullable=False),
-    sa.PrimaryKeyConstraint('id', name=op.f('apscheduler_jobs_pkey'))
-    )
-    op.create_index(op.f('ix_apscheduler_jobs_next_run_time'), 'apscheduler_jobs', ['next_run_time'], unique=False)
     # ### end Alembic commands ###

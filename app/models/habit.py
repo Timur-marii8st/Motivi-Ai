@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, date, time
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, String
 
 from ..security.encrypted_types import EncryptedTextType
 
@@ -24,6 +24,10 @@ class Habit(SQLModel, table=True):
         default=None,
         max_length=1000,
         sa_column=Column(EncryptedTextType("habits.description"), nullable=True),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
     
     # Cadence: daily, weekly, custom

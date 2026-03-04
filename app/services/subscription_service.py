@@ -45,12 +45,11 @@ class SubscriptionService:
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         key = f"quota:{user.id}:{today_str}"
 
-        # Atomic increment
-        current_usage = await redis.incr(key)
-        
-        # Set expiry (24h + 1h buffer) only on first write
-        if current_usage == 1:
-            await redis.expire(key, 86400 + 3600)
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.execute_command("EXPIRE", key, 86400 + 3600, "NX")
+            pipe_result = await pipe.execute()
+        current_usage = int(pipe_result[0])
 
         # 3. Validation
         if current_usage > limit:

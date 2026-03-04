@@ -1,4 +1,4 @@
-"""
+﻿"""
 Web search service backed by the Tavily API with Redis result caching
 and per-user rate limiting (mirrors the code_executor pattern).
 """
@@ -115,7 +115,7 @@ class SearchService:
 
         # Store in cache (TTL from config)
         await redis.setex(cache_key, settings.SEARCH_CACHE_TTL, json.dumps(results))
-        logger.info("Search '{}' → {} results (type={})", query, len(results), search_type)
+        logger.info("Search '{}' в†’ {} results (type={})", query, len(results), search_type)
         return results
 
     @classmethod
@@ -143,10 +143,11 @@ class SearchService:
         today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
         key = f"search:{user_id}:{today}"
 
-        count = await redis.incr(key)
-        if count == 1:
-            # First increment today — set key to expire at end of day + 1 h buffer
-            await redis.expire(key, 86400 + 3600)
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.execute_command("EXPIRE", key, 86400 + 3600, "NX")
+            pipe_result = await pipe.execute()
+        count = int(pipe_result[0])
 
         return count <= limit, count, limit
 
@@ -165,3 +166,4 @@ class SearchService:
                 f"{i}. [{r['title']}]({r['url']}){pub}\n   {r['snippet'][:300]}"
             )
         return "\n\n".join(lines)
+

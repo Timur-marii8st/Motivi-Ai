@@ -95,6 +95,13 @@ class UserBotManager:
         deactivated and nothing is added to ``_clients``.
         """
         from .userbot_monitor import setup_handlers
+        if user_id not in _clients and len(_clients) >= app_settings.USERBOT_MAX_ACTIVE_CLIENTS:
+            logger.warning(
+                "Userbot active client cap reached (%s). Skipping user %s",
+                app_settings.USERBOT_MAX_ACTIVE_CLIENTS,
+                user_id,
+            )
+            return
 
         client = TelegramClient(
             StringSession(session_string),

@@ -69,9 +69,11 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
 
         redis = await _get_redis()
         try:
-            count = await redis.incr(rate_key)
-            if count == 1:
-                await redis.expire(rate_key, 90_000)  # 25-hour TTL
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.incr(rate_key)
+                pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
+                pipe_result = await pipe.execute()
+            count = int(pipe_result[0])
             if count > app_settings.USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY:
                 return
         finally:

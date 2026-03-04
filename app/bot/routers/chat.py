@@ -101,7 +101,7 @@ async def handle_chat(message: Message, session):
             await message.answer("Извини, мне сложно вспомнить нашу историю прямо сейчас. Давай попробуем чуть позже.")
             return
         
-        tool_executor = ToolExecutor(session)
+        tool_executor = ToolExecutor(session, bot=message.bot)
 
         # Get current time in user's timezone (or UTC if not set)
         try:

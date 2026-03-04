@@ -92,26 +92,23 @@ class MemoryOrchestrator:
     ) -> MemoryPack:
         """
         Fetch Core, Working, and semantically similar Episodic memories.
-        All three vector-search queries run in parallel for better latency.
+        Queries are executed sequentially because a single AsyncSession
+        cannot be used concurrently across multiple awaitables.
         """
-        import asyncio
-
-        # Run all three independent retrieval operations concurrently
-        (
-            similar_core_facts,
-            working_results,
-            episodes,
-            working_history_result,
-        ) = await asyncio.gather(
-            self.core_service.retrieve_similar(session, user.id, query_text=query_text, top_k=top_k),
-            self.working_service.retrieve_similar(session, user.id, query_text=query_text),
-            self.episodic_service.retrieve_similar(session, user.id, query_text=query_text, top_k=top_k),
-            session.execute(
-                select(WorkingMemoryEntry)
-                .where(WorkingMemoryEntry.user_id == user.id)
-                .order_by(WorkingMemoryEntry.history_order.asc())
-                .limit(7)
-            ),
+        similar_core_facts = await self.core_service.retrieve_similar(
+            session, user.id, query_text=query_text, top_k=top_k
+        )
+        working_results = await self.working_service.retrieve_similar(
+            session, user.id, query_text=query_text
+        )
+        episodes = await self.episodic_service.retrieve_similar(
+            session, user.id, query_text=query_text, top_k=top_k
+        )
+        working_history_result = await session.execute(
+            select(WorkingMemoryEntry)
+            .where(WorkingMemoryEntry.user_id == user.id)
+            .order_by(WorkingMemoryEntry.history_order.asc())
+            .limit(7)
         )
 
         # Ensure CoreMemory row exists (sequential — depends on nothing above)

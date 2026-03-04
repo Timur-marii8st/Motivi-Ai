@@ -153,7 +153,7 @@ async def handle_group_message(message: Message, session, bot: Bot):
             await message.reply("Извини, не могу вспомнить контекст прямо сейчас. Попробуй ещё раз.")
             return
 
-        tool_executor = ToolExecutor(session)
+        tool_executor = ToolExecutor(session, bot=bot)
 
         # Add current time context (same pattern as private chat handler)
         try:

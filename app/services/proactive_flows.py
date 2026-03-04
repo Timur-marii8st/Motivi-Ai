@@ -4,10 +4,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
 
 from ..models.users import User
-from ..config import settings
+from ..bot.bot_provider import get_bot_instance
 from ..services.memory_orchestrator import MemoryOrchestrator
 from ..services.episodic_memory_service import EpisodicMemoryService
 from ..services.core_memory_service import CoreMemoryService
@@ -26,12 +25,9 @@ class ProactiveFlows:
     """
     Orchestrates proactive interactions: morning, evening, weekly, monthly.
     """
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, bot: Bot | None = None):
         self.session = session
-        self.bot = Bot(
-            token=settings.TELEGRAM_BOT_TOKEN,
-            default=DefaultBotProperties(parse_mode="HTML")
-        )
+        self.bot = bot or get_bot_instance()
         # Reuse shared embeddings client instead of creating one per instance
         self.episodic_service = EpisodicMemoryService(_shared_embeddings)
         self.core_service = CoreMemoryService(_shared_embeddings)
@@ -39,7 +35,7 @@ class ProactiveFlows:
         self.memory_orchestrator = MemoryOrchestrator(self.episodic_service, self.core_service, self.working_service)
         self.conversation_service = ConversationService()
         self.extractor_service = ExtractorService()
-        self.tool_executor = ToolExecutor(session)
+        self.tool_executor = ToolExecutor(session, bot=self.bot)
 
     async def _run_flow(self, user: User, prompt: str, greeting: str, top_k: int = 5) -> None:
         """

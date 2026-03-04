@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from apscheduler.triggers.cron import CronTrigger
@@ -20,20 +20,20 @@ from datetime import datetime, timezone
 
 
 # ======================================================================
-# Тесты планировщика и проактивных джоб
+# РўРµСЃС‚С‹ РїР»Р°РЅРёСЂРѕРІС‰РёРєР° Рё РїСЂРѕР°РєС‚РёРІРЅС‹С… РґР¶РѕР±
 # ======================================================================
 
 def test_start_scheduler_registers_cleanup_job():
-    """Проверяем, что daily cleanup job описан с правильным CronTrigger.
+    """РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ daily cleanup job РѕРїРёСЃР°РЅ СЃ РїСЂР°РІРёР»СЊРЅС‹Рј CronTrigger.
 
-    Без вызова start_scheduler: проверяем, что следующий запуск триггера — в 03:00.
+    Р‘РµР· РІС‹Р·РѕРІР° start_scheduler: РїСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ СЃР»РµРґСѓСЋС‰РёР№ Р·Р°РїСѓСЃРє С‚СЂРёРіРіРµСЂР° вЂ” РІ 03:00.
     """
 
     job_id = "cleanup_expired_memories"
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
 
-    # Регистрируем job как в start_scheduler (timezone на смысл не влияет)
+    # Р РµРіРёСЃС‚СЂРёСЂСѓРµРј job РєР°Рє РІ start_scheduler (timezone РЅР° СЃРјС‹СЃР» РЅРµ РІР»РёСЏРµС‚)
     trigger = CronTrigger(hour=3, minute=0, timezone=timezone.utc)
     scheduler.add_job(
         func="app.scheduler.jobs:cleanup_expired_memories_job",
@@ -46,7 +46,7 @@ def test_start_scheduler_registers_cleanup_job():
     assert job is not None
     assert isinstance(job.trigger, CronTrigger)
 
-    # Проверяем, что ближайший запуск будет в 03:00 (по UTC)
+    # РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ Р±Р»РёР¶Р°Р№С€РёР№ Р·Р°РїСѓСЃРє Р±СѓРґРµС‚ РІ 03:00 (РїРѕ UTC)
     now = datetime.now(timezone.utc)
     next_run = job.trigger.get_next_fire_time(previous_fire_time=None, now=now)
     assert next_run is not None
@@ -56,7 +56,7 @@ def test_start_scheduler_registers_cleanup_job():
     scheduler.remove_job(job_id)
 
 def test_morning_checkin_job_calls_flow_when_not_in_break_mode(monkeypatch):
-    """morning_checkin_job вызывает ProactiveFlows.morning_checkin при отсутствии break_mode."""
+    """morning_checkin_job РІС‹Р·С‹РІР°РµС‚ ProactiveFlows.morning_checkin РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё break_mode."""
     fake_session = AsyncMock()
     fake_user = MagicMock(id=123)
     fake_session.get = AsyncMock(return_value=fake_user)
@@ -66,7 +66,8 @@ def test_morning_checkin_job_calls_flow_when_not_in_break_mode(monkeypatch):
     monkeypatch.setattr("app.scheduler.jobs._is_break_mode_active", AsyncMock(return_value=False))
 
     flows_mock = AsyncMock()
-    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session: flows_mock)
+    monkeypatch.setattr("app.scheduler.jobs.get_bot_instance", lambda: MagicMock())
+    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session, bot=None: flows_mock)
 
     asyncio.run(morning_checkin_job(user_id=123))
 
@@ -75,7 +76,7 @@ def test_morning_checkin_job_calls_flow_when_not_in_break_mode(monkeypatch):
 
 
 def test_evening_weekly_monthly_jobs_skip_on_break_mode(monkeypatch):
-    """evening/weekly/monthly джобы пропускаются, если break_mode активен."""
+    """evening/weekly/monthly РґР¶РѕР±С‹ РїСЂРѕРїСѓСЃРєР°СЋС‚СЃСЏ, РµСЃР»Рё break_mode Р°РєС‚РёРІРµРЅ."""
     fake_session = AsyncMock()
     fake_session.get = AsyncMock(return_value=MagicMock(id=1))
     fake_session.close = AsyncMock()
@@ -84,7 +85,8 @@ def test_evening_weekly_monthly_jobs_skip_on_break_mode(monkeypatch):
     monkeypatch.setattr("app.scheduler.jobs._is_break_mode_active", AsyncMock(return_value=True))
 
     flows_mock = AsyncMock()
-    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session: flows_mock)
+    monkeypatch.setattr("app.scheduler.jobs.get_bot_instance", lambda: MagicMock())
+    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session, bot=None: flows_mock)
 
     asyncio.run(evening_wrapup_job(user_id=1))
     asyncio.run(weekly_plan_job(user_id=1))
@@ -97,7 +99,7 @@ def test_evening_weekly_monthly_jobs_skip_on_break_mode(monkeypatch):
 
 
 def test_send_one_off_reminder_job_sends_message(monkeypatch):
-    """send_one_off_reminder_job вызывает Bot.send_message, если пользователь найден и не в break_mode."""
+    """send_one_off_reminder_job РІС‹Р·С‹РІР°РµС‚ Bot.send_message, РµСЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅР°Р№РґРµРЅ Рё РЅРµ РІ break_mode."""
     fake_session = AsyncMock()
     fake_user = MagicMock(id=1)
     fake_session.get = AsyncMock(return_value=fake_user)
@@ -107,13 +109,10 @@ def test_send_one_off_reminder_job_sends_message(monkeypatch):
     monkeypatch.setattr("app.scheduler.jobs._is_break_mode_active", AsyncMock(return_value=False))
 
     send_message_mock = AsyncMock()
-
-    class FakeBot:
-        def __init__(self, *_, **__):
-            self.send_message = send_message_mock
-
-    # Внутри функции импортируется Bot из aiogram, поэтому подменяем его так
-    monkeypatch.setattr("aiogram.Bot", FakeBot)
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_bot_instance",
+        lambda: MagicMock(send_message=send_message_mock),
+    )
 
     asyncio.run(send_one_off_reminder_job(user_id=1, chat_id=42, message_text="Hello"))
 
@@ -121,7 +120,7 @@ def test_send_one_off_reminder_job_sends_message(monkeypatch):
 
 
 def test_habit_reminder_job_sends_when_active_and_not_logged(monkeypatch):
-    """habit_reminder_job отправляет сообщение, если привычка активна и не логировалась сегодня."""
+    """habit_reminder_job РѕС‚РїСЂР°РІР»СЏРµС‚ СЃРѕРѕР±С‰РµРЅРёРµ, РµСЃР»Рё РїСЂРёРІС‹С‡РєР° Р°РєС‚РёРІРЅР° Рё РЅРµ Р»РѕРіРёСЂРѕРІР°Р»Р°СЃСЊ СЃРµРіРѕРґРЅСЏ."""
     fake_session = AsyncMock()
 
     class FakeHabit:
@@ -154,12 +153,10 @@ def test_habit_reminder_job_sends_when_active_and_not_logged(monkeypatch):
     monkeypatch.setattr("app.scheduler.jobs.AsyncSessionLocal", lambda: fake_session)
 
     send_message_mock = AsyncMock()
-
-    class FakeBot:
-        def __init__(self, *_, **__):
-            self.send_message = send_message_mock
-
-    monkeypatch.setattr("aiogram.Bot", FakeBot)
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_bot_instance",
+        lambda: MagicMock(send_message=send_message_mock),
+    )
 
     asyncio.run(habit_reminder_job(habit_id=10))
 
@@ -170,7 +167,7 @@ def test_habit_reminder_job_sends_when_active_and_not_logged(monkeypatch):
 
 
 def test_cleanup_expired_memories_job_basic_flow(monkeypatch):
-    """cleanup_expired_memories_job выполняет select/ delete / commit при наличии устаревших сущностей."""
+    """cleanup_expired_memories_job РІС‹РїРѕР»РЅСЏРµС‚ select/ delete / commit РїСЂРё РЅР°Р»РёС‡РёРё СѓСЃС‚Р°СЂРµРІС€РёС… СЃСѓС‰РЅРѕСЃС‚РµР№."""
     fake_session = AsyncMock()
 
     first_result = MagicMock()
@@ -179,7 +176,7 @@ def test_cleanup_expired_memories_job_basic_flow(monkeypatch):
     second_result = MagicMock()
     second_result.all.return_value = [(10,)]  # WorkingMemory ids
 
-    # Дополнительный результат, чтобы не словить StopIteration при лишних execute
+    # Р”РѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚, С‡С‚РѕР±С‹ РЅРµ СЃР»РѕРІРёС‚СЊ StopIteration РїСЂРё Р»РёС€РЅРёС… execute
     third_result = MagicMock()
     third_result.all.return_value = []
 
@@ -190,21 +187,21 @@ def test_cleanup_expired_memories_job_basic_flow(monkeypatch):
 
     asyncio.run(cleanup_expired_memories_job())
 
-    # Должно быть минимум два вызова execute (эпизоды + рабочая память)
+    # Р”РѕР»Р¶РЅРѕ Р±С‹С‚СЊ РјРёРЅРёРјСѓРј РґРІР° РІС‹Р·РѕРІР° execute (СЌРїРёР·РѕРґС‹ + СЂР°Р±РѕС‡Р°СЏ РїР°РјСЏС‚СЊ)
     assert fake_session.execute.await_count >= 2
-    # commit должен быть вызван хотя бы один раз
+    # commit РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІС‹Р·РІР°РЅ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ СЂР°Р·
     assert fake_session.commit.await_count >= 1
 
 
 # ======================================================================
-# Тесты шифрования и зашифрованных типов (без реального Tink)
+# РўРµСЃС‚С‹ С€РёС„СЂРѕРІР°РЅРёСЏ Рё Р·Р°С€РёС„СЂРѕРІР°РЅРЅС‹С… С‚РёРїРѕРІ (Р±РµР· СЂРµР°Р»СЊРЅРѕРіРѕ Tink)
 # ======================================================================
 
 
 def test_encrypted_text_type_process_bind_and_result(monkeypatch):
-    """EncryptedTextType шифрует при bind и расшифровывает при чтении.
+    """EncryptedTextType С€РёС„СЂСѓРµС‚ РїСЂРё bind Рё СЂР°СЃС€РёС„СЂРѕРІС‹РІР°РµС‚ РїСЂРё С‡С‚РµРЅРёРё.
 
-    Не используем реальный Tink, мокаем encrypt/decrypt.
+    РќРµ РёСЃРїРѕР»СЊР·СѓРµРј СЂРµР°Р»СЊРЅС‹Р№ Tink, РјРѕРєР°РµРј encrypt/decrypt.
     """
     fake_manager = MagicMock()
 
@@ -231,7 +228,7 @@ def test_encrypted_text_type_process_bind_and_result(monkeypatch):
 
 
 def test_encrypted_json_type_process_bind_and_result(monkeypatch):
-    """EncryptedJSONType прозрачно шифрует/дешифрует словарь."""
+    """EncryptedJSONType РїСЂРѕР·СЂР°С‡РЅРѕ С€РёС„СЂСѓРµС‚/РґРµС€РёС„СЂСѓРµС‚ СЃР»РѕРІР°СЂСЊ."""
     fake_manager = MagicMock()
 
     def fake_encrypt(data: bytes, aad: bytes | None = None) -> bytes:
@@ -255,3 +252,4 @@ def test_encrypted_json_type_process_bind_and_result(monkeypatch):
 
     loaded = enc_type.process_result_value(stored, dialect=None)
     assert loaded == payload
+

@@ -1,13 +1,24 @@
 from __future__ import annotations
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
+from datetime import datetime, timezone as _tz
+
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.plan import Plan
 
+if TYPE_CHECKING:
+    from aiogram import Bot
+
 class ToolExecutor:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, bot: Bot | None = None):
         self.session = session
+        self.bot = bot
+
+    def _require_bot(self) -> Bot:
+        if self.bot is None:
+            raise RuntimeError("ToolExecutor requires bot instance for Telegram send operations")
+        return self.bot
 
     async def execute(self, tool_name: str, args: Dict[str, Any], chat_id: int, user_id: int) -> Dict[str, Any]:
         """
@@ -95,10 +106,17 @@ class ToolExecutor:
         
         reminder_dt = datetime.fromisoformat(iso_str)
         
-        # Get user's timezone from profile (not from LLM - saves tokens!)
+        # Timezone priority:
+        # 1) Explicit tool arg (if provided)
+        # 2) User profile timezone
+        # 3) UTC fallback
         try:
             user = await self.session.get(User, user_id)
-            tzname = user.user_timezone if user and user.user_timezone else "UTC"
+            explicit_tz = args.get("timezone")
+            if explicit_tz:
+                tzname = str(explicit_tz)
+            else:
+                tzname = user.user_timezone if user and user.user_timezone else "UTC"
         except Exception as e:
             logger.error("Failed to get user timezone for user {}: {}", user_id, e)
             tzname = "UTC"
@@ -250,13 +268,6 @@ class ToolExecutor:
 
     async def _create_plan(self, args: Dict, chat_id: int, user_id: int) -> Dict:
         """Create a plan (daily/weekly/monthly) and send it to user."""
-        from datetime import datetime
-        from aiogram import Bot
-        from aiogram.client.default import DefaultBotProperties
-        from sqlmodel import select
-        from ..models.plan import Plan
-        from ..config import settings
-
         plan_level = args["plan_level"]
         plan_content = args["plan_content"]
 
@@ -280,10 +291,7 @@ class ToolExecutor:
             await self.session.flush()  # Flush to get plan.id without committing
 
             # Send plan to user via Telegram
-            bot = Bot(
-                token=settings.TELEGRAM_BOT_TOKEN,
-                default=DefaultBotProperties(parse_mode="HTML")
-            )
+            bot = self._require_bot()
 
             duration_text = {
                 "daily": "на день",
@@ -293,7 +301,6 @@ class ToolExecutor:
 
             message = f"📋 <b>Твой план {duration_text}:</b>\n\n{plan_content}"
             await bot.send_message(chat_id, message)
-            await bot.session.close()
 
             logger.info("Created {} plan for user {} (plan_id={})", plan_level, user_id, plan.id)
             return {"success": True, "plan_id": plan.id}
@@ -345,11 +352,8 @@ class ToolExecutor:
 
     async def _edit_plan(self, args: Dict, chat_id: int, user_id: int) -> Dict:
         """Edit an existing plan and optionally extend its expiry."""
-        from datetime import datetime, timezone
+        from datetime import datetime
         from sqlmodel import select
-        from aiogram import Bot
-        from aiogram.client.default import DefaultBotProperties
-        from ..config import settings
 
         plan_id = args.get("plan_id")
         plan_content = args.get("plan_content")
@@ -387,10 +391,7 @@ class ToolExecutor:
             await self.session.flush()  # Flush to persist changes without committing
 
             # Send updated plan to user via Telegram
-            bot = Bot(
-                token=settings.TELEGRAM_BOT_TOKEN,
-                default=DefaultBotProperties(parse_mode="HTML")
-            )
+            bot = self._require_bot()
 
             duration_text = {
                 "daily": "на день",
@@ -400,7 +401,6 @@ class ToolExecutor:
 
             message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{plan_content}"
             await bot.send_message(chat_id, message)
-            await bot.session.close()
 
             logger.info("Edited plan {} for user {}", plan_id, user_id)
             return {
@@ -422,10 +422,6 @@ class ToolExecutor:
         collected and sent directly to the user via Telegram (photos for images, documents
         for everything else). The LLM receives a summary of what was sent.
         """
-        from datetime import datetime, timezone as _tz
-        from aiogram import Bot
-        from aiogram.client.default import DefaultBotProperties
-        from aiogram.types import BufferedInputFile
         from ..services.code_executor_service import code_executor, SUPPORTED_LANGUAGES
         from ..services.subscription_service import SubscriptionService
         from ..services.conversation_history_service import ConversationHistoryService
@@ -469,9 +465,11 @@ class ToolExecutor:
             redis = ConversationHistoryService._get_redis_client()
             today_str = datetime.now(_tz.utc).strftime("%Y-%m-%d")
             counter_key = f"code_exec:{user_id}:{today_str}"
-            current_count = await redis.incr(counter_key)
-            if current_count == 1:
-                await redis.expire(counter_key, 86400 + 3600)
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.incr(counter_key)
+                pipe.execute_command("EXPIRE", counter_key, 86400 + 3600, "NX")
+                pipe_result = await pipe.execute()
+            current_count = int(pipe_result[0])
             if current_count > limit:
                 return {
                     "success": False,
@@ -483,29 +481,24 @@ class ToolExecutor:
 
         # Send any output files directly to the user via Telegram
         if result.output_files:
-            bot = Bot(
-                token=settings.TELEGRAM_BOT_TOKEN,
-                default=DefaultBotProperties(parse_mode="HTML"),
-            )
+            from aiogram.types import BufferedInputFile
+            bot = self._require_bot()
             sent_files: list[str] = []
             failed_files: list[str] = []
-            try:
-                for fname, fdata in result.output_files:
-                    from pathlib import Path
-                    ext = Path(fname).suffix.lower()
-                    try:
-                        input_file = BufferedInputFile(fdata, filename=fname)
-                        if ext in _IMAGE_EXTENSIONS:
-                            await bot.send_photo(chat_id, input_file)
-                        else:
-                            await bot.send_document(chat_id, input_file)
-                        sent_files.append(fname)
-                        logger.info("Sent output file {} to chat {}", fname, chat_id)
-                    except Exception as e:
-                        logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
-                        failed_files.append(fname)
-            finally:
-                await bot.session.close()
+            for fname, fdata in result.output_files:
+                from pathlib import Path
+                ext = Path(fname).suffix.lower()
+                try:
+                    input_file = BufferedInputFile(fdata, filename=fname)
+                    if ext in _IMAGE_EXTENSIONS:
+                        await bot.send_photo(chat_id, input_file)
+                    else:
+                        await bot.send_document(chat_id, input_file)
+                    sent_files.append(fname)
+                    logger.info("Sent output file {} to chat {}", fname, chat_id)
+                except Exception as e:
+                    logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
+                    failed_files.append(fname)
 
             result_dict["output_files_sent"] = sent_files
             if failed_files:

@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, String
 from pgvector.sqlalchemy import Vector
 
 from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
@@ -28,6 +28,10 @@ class CoreMemory(SQLModel, table=True):
     sleep_schedule_json: Optional[dict] = Field(
         default=None,
         sa_column=Column(EncryptedJSONType("core_memory.sleep_schedule")),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
 
     # Use timezone-aware UTC datetimes and a timezone-aware DB column.

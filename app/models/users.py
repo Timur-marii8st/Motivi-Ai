@@ -1,7 +1,7 @@
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime, timezone, time, timedelta
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, String
 from ..config import settings
 
 from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
@@ -39,6 +39,10 @@ class User(SQLModel, table=True):
     occupation_json: Optional[dict] = Field(
         default=None,
         sa_column=Column(EncryptedJSONType("users.occupation")),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
 
     created_at: datetime = Field(

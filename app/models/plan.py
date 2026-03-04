@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, timedelta
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, String
 
 from ..security.encrypted_types import EncryptedTextType
 
@@ -24,6 +24,10 @@ class Plan(SQLModel, table=True):
     plan_level: str = Field(max_length=20, index=True)  # daily, weekly, monthly
     content: str = Field(
         sa_column=Column(EncryptedTextType("plans.content"), nullable=False),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
 
     created_at: datetime = Field(

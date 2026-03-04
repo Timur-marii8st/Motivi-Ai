@@ -8,6 +8,7 @@ from sqlalchemy import event
 from loguru import logger
 
 from .config import settings
+from .security.row_integrity import register_row_integrity_hooks
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -24,6 +25,7 @@ def set_timezone(dbapi_connection, connection_record):
     cursor.close()
 
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+register_row_integrity_hooks()
 
 async def init_db() -> None:
     """Create tables and enable pgvector extension."""
