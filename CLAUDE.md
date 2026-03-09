@@ -4,7 +4,7 @@ This file provides context for AI assistants working on this codebase.
 
 ## Project Overview
 
-**Motivi_AI** is a proactive Telegram planning assistant powered by LLMs. It uses a cognitive memory architecture (Core, Working, and Episodic memory) with RAG-based retrieval, habit tracking, Google Calendar integration, and autonomous scheduled interactions (morning/evening check-ins, weekly reviews).
+**Motivi_AI** is a proactive Telegram planning assistant powered by LLMs. It uses a cognitive memory architecture (Core, Working, and Episodic memory) with RAG-based retrieval, habit tracking, Google Calendar integration, sandboxed code execution, web search, agent skills, a read-only Telegram userbot for channel monitoring, and autonomous scheduled interactions (morning/evening check-ins, weekly reviews, personalised news digests, custom user triggers).
 
 The bot is built with **Python 3.11**, **Aiogram 3.x** (Telegram framework), and **FastAPI** (webhook server). All LLM calls go through **OpenRouter** using the OpenAI-compatible Python client.
 
@@ -25,6 +25,8 @@ The bot is built with **Python 3.11**, **Aiogram 3.x** (Telegram framework), and
 | Main LLM | Grok (via OpenRouter, configurable via `LLM_MODEL_ID`) |
 | Audio/Image LLM | Gemini 2.0 Flash Lite via OpenRouter (`AUDIO_IMAGE_MODEL_ID`) |
 | Extractor LLM | Gemma 3n via OpenRouter (`EXTRACTOR_MODEL_ID`) |
+| Web Search | Tavily API (via `SearchService`) |
+| MTProto Client | Telethon (read-only userbot for channel/DM monitoring) |
 | Scheduling | APScheduler 3.x (AsyncIO) |
 | FSM State Storage | Redis (via aiogram's RedisStorage) |
 | Conversation History | Redis |
@@ -51,7 +53,7 @@ Motivi-Ai/
 │   │   ├── routers/            # Aiogram routers (one per feature domain)
 │   │   │   ├── chat.py         # Main message handler (natural language → LLM)
 │   │   │   ├── onboarding.py   # /start flow (FSM-based)
-│   │   │   ├── habits.py       # /habits, /add_habit
+│   │   │   ├── habits.py       # /habits, /add_habit (inline keyboard for logging)
 │   │   │   ├── profile.py      # /profile, account deletion
 │   │   │   ├── settings.py     # /settings (toggle proactive flows, break mode)
 │   │   │   ├── subscription.py # /subscribe, Telegram Stars payments
@@ -59,11 +61,14 @@ Motivi-Ai/
 │   │   │   ├── multimodal.py   # Voice notes + photo handling
 │   │   │   ├── admin.py        # Admin-only commands
 │   │   │   ├── break_mode.py   # /break command
+│   │   │   ├── group.py        # Group/supergroup message handling
+│   │   │   ├── triggers.py     # /triggers, /add_trigger (custom proactive flows)
+│   │   │   ├── userbot.py      # /connect_userbot, /disconnect_userbot, /userbot_interests
 │   │   │   └── common.py       # Fallback / unknown command handler
 │   │   ├── middlewares/
 │   │   │   └── db_session.py   # Injects async DB session into handler data
 │   │   ├── init.py             # Bot command registration
-│   │   └── states.py           # Aiogram FSM state groups
+│   │   └── states.py           # Aiogram FSM state groups (Onboarding, HabitCreation, TriggerCreation, UserBotSetup)
 │   ├── llm/
 │   │   ├── client.py           # AsyncOpenAI client singleton (points to OpenRouter)
 │   │   ├── conversation_service.py  # ReAct loop: LLM call → tool dispatch → response
@@ -79,7 +84,7 @@ Motivi-Ai/
 │   │   ├── tool_executor.py            # Dispatches LLM tool calls to actual implementations
 │   │   ├── conversation_history_service.py  # Redis-backed conversation history
 │   │   ├── habit_service.py            # Habit CRUD, streak tracking, reminders
-│   │   ├── proactive_flows.py          # Morning/Evening/Weekly/Monthly check-in orchestration
+│   │   ├── proactive_flows.py          # Morning/Evening/Weekly/Monthly/News check-in orchestration
 │   │   ├── profile_services.py         # get_or_create_user, profile updates
 │   │   ├── account_service.py          # Account deletion (GDPR)
 │   │   ├── oauth_state_service.py      # OAuth state token management (Redis)
@@ -87,22 +92,40 @@ Motivi-Ai/
 │   │   ├── stt_service.py              # Speech-to-text (Whisper via faster-whisper)
 │   │   ├── vision_service.py           # Image analysis
 │   │   ├── subscription_service.py     # Telegram Stars subscription logic
-│   │   └── profile_completeness_service.py  # Tracks user question/interaction counts
+│   │   ├── profile_completeness_service.py  # Tracks user question/interaction counts
+│   │   ├── code_executor_service.py    # Sandboxed Docker code execution with file output
+│   │   ├── skills_service.py           # Agent Skills: load metadata + full instructions from .md files
+│   │   ├── search_service.py           # Tavily web search with Redis caching + rate limiting
+│   │   ├── news_digest_service.py      # Personalised news digest from user profile + core memory
+│   │   ├── user_trigger_service.py     # Custom user trigger CRUD (max 5 per user)
+│   │   ├── userbot_manager.py          # Telethon client lifecycle (start/stop/registry)
+│   │   └── userbot_monitor.py          # Telethon event handlers: channel posts + DM reply suggestions
 │   ├── models/                 # SQLModel table definitions
 │   │   ├── users.py            # User (main table, encrypted name/occupation)
 │   │   ├── core_memory.py      # CoreMemory + CoreFact (with vector embedding)
 │   │   ├── working_memory.py   # WorkingMemory + WorkingMemoryEntry
 │   │   ├── episode.py          # Episode + EpisodeEmbedding (pgvector)
 │   │   ├── habit.py            # Habit + HabitLog
-│   │   ├── settings.py         # UserSettings (proactive flow toggles)
+│   │   ├── settings.py         # UserSettings (proactive flow toggles, userbot settings)
 │   │   ├── oauth_token.py      # Google OAuth credentials (encrypted)
 │   │   ├── plan.py             # Plan (daily/weekly/monthly, time-expiring)
 │   │   ├── facts.py            # CoreFact model
-│   │   └── profile_completeness.py  # ProfileCompleteness tracking
+│   │   ├── profile_completeness.py  # ProfileCompleteness tracking
+│   │   ├── user_trigger.py     # UserTrigger (custom cron-scheduled proactive prompts)
+│   │   └── userbot_session.py  # UserBotSession (encrypted Telethon StringSession)
+│   ├── skills/                 # Agent Skill instruction files (Markdown with YAML frontmatter)
+│   │   ├── cv-resume.md
+│   │   ├── data-analysis.md
+│   │   ├── excel-spreadsheet.md
+│   │   ├── powerpoint-presentation.md
+│   │   ├── project-planner.md
+│   │   ├── study-planner.md
+│   │   └── word-document.md
 │   ├── scheduler/
 │   │   ├── scheduler_instance.py  # APScheduler singleton
-│   │   ├── job_manager.py         # Per-user job scheduling (morning/evening/weekly/monthly)
-│   │   ├── jobs.py                # Job functions called by APScheduler
+│   │   ├── job_manager.py         # Per-user job scheduling (morning/evening/weekly/monthly/news/triggers)
+│   │   └── jobs.py                # Job functions called by APScheduler
+│   ├── jobs/
 │   │   └── weekly_summary.py      # Weekly memory summarization job
 │   ├── security/
 │   │   ├── encryption_manager.py  # Google Tink AEAD encryptor singleton
@@ -119,7 +142,11 @@ Motivi-Ai/
 │   │   ├── gemma_system.txt       # Extractor prompt (Russian)
 │   │   └── gemma_system_eng.txt   # Extractor prompt (English)
 │   └── utils/
-│       └── get_user_time.py       # Helper: current time in user's timezone
+│       ├── get_user_time.py       # Helper: current time in user's timezone
+│       ├── encryption.py          # Fernet-based TokenEncryption for OAuth tokens
+│       ├── timeparse.py           # parse_hhmm() — parses "HH:MM" strings to time objects
+│       ├── timezone_resolver.py   # City name → IANA timezone lookup (100+ cities)
+│       └── validators.py          # is_valid_timezone(), clamp_age()
 ├── alembic/                    # Database migrations
 │   ├── env.py                  # Alembic environment setup
 │   ├── versions/               # Migration revision files
@@ -138,7 +165,8 @@ Motivi-Ai/
 │   ├── test_scheduler_and_encryption.py
 │   └── test_scheduler_reminder_tool.py
 ├── docker/
-│   └── app.Dockerfile          # Python 3.11-slim + ffmpeg + Poetry
+│   ├── app.Dockerfile          # Python 3.11-slim + ffmpeg + Poetry
+│   └── sandbox.Dockerfile      # Python sandbox image with matplotlib/docx/xlsx/pptx
 ├── docker-compose.yml          # app, db (pgvector/pg16), redis, nginx-proxy-manager
 ├── pyproject.toml              # Poetry config + dev dependencies
 ├── alembic.ini                 # Alembic config (DB URL read from app.config.settings)
@@ -156,12 +184,28 @@ The app runs as a FastAPI server. Telegram sends updates via HTTP POST to `/tele
 ### 2. ReAct Tool-Calling Loop
 
 `ConversationService.respond_with_tools()` implements a ReAct (Reason+Act) pattern:
-1. Assemble system prompt (persona + user memory context)
+1. Assemble system prompt (persona + user memory context + skills snippet)
 2. Call LLM with `tools=ALL_TOOLS`, `tool_choice="auto"`
 3. If the model returns tool calls, execute them via `ToolExecutor` and loop
 4. Continue until no tool calls (final answer) or `max_iterations=5`
 
 Tool definitions live in `app/llm/tool_schemas.py`. Tool execution logic lives in `app/services/tool_executor.py`.
+
+**Available LLM Tools** (defined in `tool_schemas.py`):
+
+| Tool | Description |
+|---|---|
+| `schedule_reminder` | Schedule a one-off reminder at a specific datetime |
+| `cancel_reminder` | Cancel a scheduled reminder by job_id |
+| `list_reminders` | List all active reminders for the user |
+| `create_plan` | Create a daily/weekly/monthly plan |
+| `check_plan` | Check active (non-expired) plans |
+| `edit_plan` | Edit an existing plan's content or extend its expiry |
+| `create_calendar_event` | Create a Google Calendar event |
+| `check_calendar_availability` | Check if user is free during a time window |
+| `execute_code` | Run code in a sandboxed Docker container |
+| `load_skill` | Load specialist skill instructions (progressive loading) |
+| `web_search` | Search the web via Tavily API |
 
 ### 3. Three-Layer Memory Architecture
 
@@ -171,7 +215,7 @@ Each user message triggers memory assembly via `MemoryOrchestrator.assemble()`:
 - **Working Memory** (`WorkingMemory`): Short-term summaries that decay after `WORKING_MEMORY_LIFETIME_DAYS` days.
 - **Episodic Memory** (`Episode` + `EpisodeEmbedding`): Past conversation episodes retrieved via RAG (pgvector IVFFlat index).
 
-The assembled `MemoryPack` is serialized to a JSON context block injected into the system prompt.
+The assembled `MemoryPack` is serialized to a JSON context block injected into the system prompt. All four memory queries run in parallel via `asyncio.gather()`.
 
 ### 4. Field-Level Encryption
 
@@ -186,14 +230,136 @@ These transparently encrypt on write and decrypt on read using Google Tink AEAD 
 `JobManager.schedule_user_jobs()` registers per-user APScheduler cron jobs for:
 - Morning check-in (at user's wake time)
 - Evening wrap-up (1 hour before bed time)
-- Weekly review (configurable)
-- Monthly review (configurable)
+- Weekly review (Sundays at 18:00 local)
+- Monthly review (1st of month at 18:00 local)
+- News digest (wake_time + `NEWS_DIGEST_OFFSET_MINUTES`, opt-in)
 
-Job IDs follow the pattern `{type}_{user_id}` (e.g., `morning_42`). Jobs are replaced atomically when settings change.
+Additionally, `JobManager.schedule_user_triggers()` handles user-defined custom triggers.
+
+Job IDs follow patterns like `{type}_{user_id}` (e.g., `morning_42`) or `trigger_{user_id}_{trigger_id}`.
 
 ### 6. Conversation History
 
 Short-term conversation turns (user + assistant text only) are stored in Redis via `ConversationHistoryService`. System messages and raw tool call/result messages are excluded from storage — the system prompt is regenerated fresh each turn with current memory context.
+
+### 7. Agent Skills (Progressive Loading)
+
+Skills are `.md` files in `app/skills/` with YAML-like frontmatter:
+
+```markdown
+---
+name: word-document
+description: Create Word (.docx) documents...
+---
+# Full instructions here...
+```
+
+**Two-level loading:**
+- **Level 1 (metadata)**: Name + description is appended to every system prompt (~80 tokens per skill). The LLM sees what's available.
+- **Level 2 (full instructions)**: The LLM calls `load_skill(name)` to load the full instructions only when needed (300–1500 tokens).
+
+Current skills: `cv-resume`, `data-analysis`, `excel-spreadsheet`, `powerpoint-presentation`, `project-planner`, `study-planner`, `word-document`.
+
+### 8. Sandboxed Code Execution
+
+The LLM can run code via the `execute_code` tool inside isolated Docker containers.
+
+**Python sandbox image** (`motivi-sandbox:latest`, built from `docker/sandbox.Dockerfile`) includes: matplotlib, numpy, pandas, scipy, seaborn, python-docx, openpyxl, python-pptx, Pillow.
+
+**Security controls (all enforced at the Docker level):**
+
+| Control | Value |
+|---|---|
+| Network | `--network=none` (completely disabled) |
+| Filesystem | `--read-only` root + `/tmp` tmpfs (32 MB) |
+| Memory | `--memory=256m` (hard limit, swap disabled) |
+| CPU | `--cpu-quota` = 0.5 cores |
+| Process limit | `--pids-limit=64` (prevents fork bombs) |
+| Linux capabilities | `--cap-drop=ALL` |
+| Privilege escalation | `--security-opt=no-new-privileges` |
+| User | `-u nobody` (non-root) |
+| Wall-clock timeout | 30 seconds (container force-killed) |
+| Output cap | 8 KB stdout/stderr |
+| Container lifetime | `--rm` (auto-deleted after exit) |
+
+**File output:** Python code can save files to `/output/` inside the container. After execution, files (up to 10 files, 10 MB each, 25 MB total) with allowed extensions are collected and sent to the user via Telegram (images as photos, everything else as documents).
+
+**Supported languages:**
+
+| Language key | Docker image |
+|---|---|
+| `python` / `python3` | `motivi-sandbox:latest` |
+| `javascript` / `js` | `node:20-alpine` |
+| `bash` / `sh` | `alpine:3` |
+
+**Rate limiting:** Trial users get 5 executions/day, Premium gets 50. Expired users are blocked. Admins bypass limits.
+
+### 9. Web Search (Tavily)
+
+The `web_search` tool uses the Tavily API for real-time web and news search.
+
+- Results are cached in Redis (TTL from `SEARCH_CACHE_TTL`, default 1 hour)
+- Rate-limited per user per day (Trial: 10, Premium: 100, Admin: unlimited)
+- Supports `general` and `news` search types
+
+### 10. Personalised News Digest
+
+`NewsDigestService` generates search queries from the user's occupation and core memory facts that mention interests/hobbies. Articles are fetched via `SearchService` (news type) and formatted as an XML block injected into the proactive flow prompt. Fires daily at wake_time + offset (default 30 min), opt-in via `enable_news_digest` setting.
+
+### 11. Read-Only Telegram Userbot (MTProto)
+
+Users can connect their personal Telegram account via `/connect_userbot`. The system uses Telethon (MTProto) to monitor:
+
+- **Channel posts**: LLM classifies whether a post matches the user's interests. If yes, a notification with an excerpt and link is sent via the bot.
+- **Incoming DMs**: LLM generates 3 reply suggestions. A notification with the suggestions is sent via the bot.
+
+**Safety guarantees:**
+- Strictly read-only: no write operations (no send_message, mark_as_read, etc.)
+- Session strings encrypted at rest via `EncryptedTextType`
+- Rate-limited: max N notifications per channel per user per day (configurable)
+- Users can set interests via `/userbot_interests` and toggle features in settings
+
+### 12. Custom User Triggers
+
+Users can define their own recurring proactive prompts via `/add_trigger`:
+- FSM-based creation flow (name → prompt → HH:MM time → weekday schedule)
+- Supports Russian and English weekday names
+- Max 5 triggers per user
+- Each trigger fires an LLM-powered proactive flow at the scheduled time
+- Managed via `/triggers` with inline keyboard (toggle on/off, delete)
+
+### 13. Multi-Language Support
+
+`ConversationService` loads both Russian (`moti_system.txt`) and English (`moti_system_eng.txt`) persona prompts. The `language` parameter (default `"ru"`) selects which prompt to use. The extractor prompt also has both language variants (`gemma_system.txt` / `gemma_system_eng.txt`).
+
+### 14. Group Chat Support
+
+The bot works inside Telegram groups and supergroups. It responds **only** when explicitly addressed:
+- User sends a message containing `@botusername`
+- User replies to one of the bot's own messages
+
+All other group messages are silently ignored. The full per-user memory/subscription/history pipeline runs as normal — memories are stored under the user's personal profile.
+
+---
+
+## Router Registration Order
+
+Registration order in `dispatcher.py` matters — earlier routers take priority:
+
+1. `onboarding_router` — /start flow
+2. `subscription_router` — /subscribe, payments
+3. `oauth_router` — /connect_calendar
+4. `habits_router` — /habits, /add_habit
+5. `profile_router` — /profile
+6. `settings_router` — /settings
+7. `break_mode_router` — /break
+8. `admin_router` — admin commands
+9. `group_router` — group/supergroup messages
+10. `triggers_router` — /triggers, /add_trigger
+11. `userbot_router` — /connect_userbot, /disconnect_userbot, /userbot_interests
+12. `multimodal_router` — voice notes, photos
+13. `chat_router` — main natural language handler (catch-all)
+14. `common_router` — fallback/unknown commands
 
 ---
 
@@ -209,17 +375,32 @@ All configuration is loaded from environment variables via Pydantic Settings. Ke
 | `DATABASE_URL` | PostgreSQL async URL (`postgresql+asyncpg://...`) |
 | `REDIS_URL` | Redis connection URL |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
-| `LLM_MODEL_ID` | Main conversational model (default: `x-ai/grok-4.1-fast`) |
-| `AUDIO_IMAGE_MODEL_ID` | Audio/image model (default: `google/gemini-2.0-flash-lite-001`) |
-| `EMBEDDING_MODEL_ID` | Embedding model (default: `qwen/qwen3-embedding-8b`) |
-| `EXTRACTOR_MODEL_ID` | Fact extraction model (default: `google/gemma-3n-e4b-it`) |
+| `LLM_MODEL_ID` | Main conversational model |
+| `AUDIO_IMAGE_MODEL_ID` | Audio/image model |
+| `EMBEDDING_MODEL_ID` | Embedding model |
+| `EXTRACTOR_MODEL_ID` | Fact extraction model |
 | `ENCRYPTION_KEY` | Fernet key (32 url-safe base64 bytes) |
 | `DATA_ENCRYPTION_KEYSET_B64` | Tink AEAD keyset (base64-encoded JSON) |
-| `VECTOR_DIM` | Embedding dimensions (default: 4096 for Qwen3-8b) |
+| `VECTOR_DIM` | Embedding dimensions (default: 4096) |
 | `ADMIN_USER_IDS` | Comma-separated Telegram user IDs for admin commands |
-| `ENV` | `dev` or `production` (dev skips migrations, uses `create_all`) |
+| `ENV` | `dev` or `production` |
 | `TRIAL_DAYS` | Days of free trial (default: 7) |
 | `SUBSCRIPTION_PRICE_STARS` | Telegram Stars price for premium (default: 100) |
+| `CODE_EXEC_DAILY_TRIAL` | Code exec limit for trial users (default: 5) |
+| `CODE_EXEC_DAILY_PREMIUM` | Code exec limit for premium users (default: 50) |
+| `TAVILY_API_KEY` | Tavily API key for web search |
+| `SEARCH_CACHE_TTL` | Redis TTL for search cache (default: 3600s) |
+| `SEARCH_MAX_RESULTS` | Max search results per call (default: 5) |
+| `SEARCH_DAILY_TRIAL` | Daily search limit for trial (default: 10) |
+| `SEARCH_DAILY_PREMIUM` | Daily search limit for premium (default: 100) |
+| `NEWS_DIGEST_OFFSET_MINUTES` | Minutes after wake_time for news digest (default: 30) |
+| `TELEGRAM_API_ID` | Telegram MTProto API ID (for userbot) |
+| `TELEGRAM_API_HASH` | Telegram MTProto API hash (for userbot) |
+| `USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY` | Max channel notifications per user per day (default: 5) |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_REDIRECT_URI` | Google OAuth redirect URI |
+| `SENTRY_DSN` | Sentry DSN for error monitoring |
 
 ---
 
@@ -245,7 +426,12 @@ docker-compose up db redis -d
 # 5. Apply DB migrations
 poetry run alembic upgrade head
 
-# 6. Run the app (development)
+# 6. Build the Python sandbox image (for code execution)
+docker build -f docker/sandbox.Dockerfile -t motivi-sandbox:latest .
+docker pull node:20-alpine
+docker pull alpine:3
+
+# 7. Run the app (development)
 ENV=dev poetry run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -297,7 +483,7 @@ poetry run mypy app/
 ## Adding a New Bot Command / Feature
 
 1. **Add a router** in `app/bot/routers/your_feature.py`. Use `Router(name="your_feature")`.
-2. **Register the router** in `app/bot/dispatcher.py` via `dp.include_router(your_router)`.
+2. **Register the router** in `app/bot/dispatcher.py` via `dp.include_router(your_router)`. Mind the registration order — command routers go before `group_router`, `multimodal_router`, and `chat_router`.
 3. **Add FSM states** (if multi-step) in `app/bot/states.py`.
 4. **Create service** in `app/services/your_service.py` for business logic.
 5. **Add models** in `app/models/your_model.py` and generate a migration.
@@ -306,8 +492,21 @@ poetry run mypy app/
 ## Adding a New LLM Tool
 
 1. Define the tool schema in `app/llm/tool_schemas.py` following the existing `TOOL_*` pattern.
-2. Add it to the `ALL_TOOLS` list at the bottom of that file.
+2. Add it to the `RAW_TOOLS` list at the bottom of that file (it auto-wraps into `ALL_TOOLS`).
 3. Implement execution logic in `app/services/tool_executor.py` in the `execute()` dispatch method.
+
+## Adding a New Agent Skill
+
+1. Create a `.md` file in `app/skills/` with YAML frontmatter:
+   ```markdown
+   ---
+   name: my-skill
+   description: One-line description of what this skill does
+   ---
+   # Full step-by-step instructions here...
+   ```
+2. The skill is automatically discovered by `SkillsService` — no code changes needed.
+3. The metadata cache is built once on first request. Restart the app after adding skills in production.
 
 ## Adding a New Encrypted Column
 
@@ -335,6 +534,7 @@ The `column_label` argument (e.g., `"mymodel.sensitive_text"`) must be unique pe
 - Use `from __future__ import annotations` for forward references
 - Async-first: all DB operations, LLM calls, and Telegram API calls use `async/await`
 - Use `loguru` for logging (not the stdlib `logging` module): `from loguru import logger`
+- Use loguru positional-arg format (`logger.info("msg {}", val)`) — NOT f-strings or `%s` format
 - Pydantic v2 models throughout (including SQLModel)
 
 ### Database Sessions
@@ -350,11 +550,13 @@ The `column_label` argument (e.g., `"mymodel.sensitive_text"`) must be unique pe
 ### Telegram Message Formatting
 - Bot is configured with `parse_mode="HTML"` by default
 - Use HTML tags (`<b>`, `<i>`, `<code>`, etc.) in response text — not Markdown
+- Escape user-generated content with `html.escape()` before embedding in HTML
 
 ### Timezone Handling
 - User timezones are stored as IANA timezone strings (e.g., `"Europe/Moscow"`)
 - All `datetime` objects stored in the DB should be timezone-aware UTC
 - Use `ZoneInfo` (stdlib) not `pytz` for new timezone operations, though both exist in the codebase
+- `app/utils/timezone_resolver.py` maps 100+ city names to IANA timezones
 
 ### Subscription Tiers
 Three user states:
@@ -363,6 +565,14 @@ Three user states:
 - **Expired**: Trial over, no subscription (hard-blocked from AI responses)
 
 Daily message quotas: Trial=20, Premium=200, Expired=0 (configurable in `config.py`).
+
+Code execution and web search are also gated by subscription tier with separate daily limits.
+
+### Rate Limiting Pattern
+The codebase uses a consistent Redis-based daily counter pattern for rate limiting:
+- Key format: `{feature}:{user_id}:{YYYY-MM-DD}`
+- `INCR` the key, set `EXPIRE` on first increment (86400 + 3600 buffer)
+- Used for: code execution, web search, userbot channel notifications
 
 ---
 
@@ -380,102 +590,77 @@ Daily message quotas: Trial=20, Premium=200, Expired=0 (configurable in `config.
 
 | File | Purpose |
 |---|---|
-| `app/main.py` | Application entry point, all HTTP routes |
+| `app/main.py` | Application entry point, all HTTP routes, lifespan (startup/shutdown) |
 | `app/config.py` | Single source of truth for all configuration |
 | `app/bot/dispatcher.py` | Router/middleware registration order matters |
-| `app/llm/conversation_service.py` | Core LLM interaction logic |
-| `app/llm/tool_schemas.py` | All tools available to the LLM |
+| `app/bot/states.py` | All FSM state groups (Onboarding, HabitCreation, TriggerCreation, UserBotSetup) |
+| `app/llm/conversation_service.py` | Core LLM interaction logic (ReAct loop) |
+| `app/llm/tool_schemas.py` | All tools available to the LLM (11 tools) |
 | `app/services/memory_orchestrator.py` | Memory assembly (central to every conversation) |
-| `app/services/tool_executor.py` | Tool call dispatch |
+| `app/services/tool_executor.py` | Tool call dispatch (all 11 handlers) |
+| `app/services/code_executor_service.py` | Sandboxed Docker code execution |
+| `app/services/skills_service.py` | Agent Skills progressive loading |
+| `app/services/search_service.py` | Tavily web search with caching |
+| `app/services/news_digest_service.py` | Personalised news digest |
+| `app/services/userbot_manager.py` | Telethon client lifecycle |
+| `app/services/userbot_monitor.py` | Channel/DM event handlers with LLM classification |
 | `app/prompts/moti_system.txt` | Bot personality and instructions (Russian) |
+| `app/prompts/moti_system_eng.txt` | Bot personality and instructions (English) |
 | `app/security/encrypted_types.py` | Column encryption TypeDecorators |
-| `app/scheduler/job_manager.py` | Proactive scheduling logic |
+| `app/scheduler/job_manager.py` | Proactive scheduling + custom triggers |
+| `app/scheduler/jobs.py` | All job functions (proactive flows, triggers, reminders, cleanup) |
+| `app/skills/*.md` | Agent Skill instruction files (7 skills) |
 | `alembic/versions/` | All DB migration history |
 
 ---
 
-## Recent Changes (2026-02-26)
+## Alembic Migration History
 
-### Bug Fixes & Optimisations Applied
-
-| File | Fix |
+| Migration | Description |
 |---|---|
-| `app/models/users.py` | Removed duplicate `touch()` method definition (was defined twice) |
-| `app/services/extractor_service.py` | Replaced stdlib `logging` with `loguru`; fixed f-string → loguru positional-arg format |
-| `app/services/proactive_flows.py` | Extracted 4-method duplication into single `_run_flow()` helper; shared `GeminiEmbeddings` singleton across instances; parallelised history save + bot.send with `asyncio.gather` |
-| `app/scheduler/jobs.py` | Removed duplicate imports (`datetime`, `timedelta`, `delete`); extracted 4 identical job functions into `_run_proactive_job()`; wrapped `bot.send_message` in `try/finally` to guarantee `bot.session.close()` on exception |
-| `app/bot/routers/habits.py` | Fixed `user.timezone` → `user.user_timezone` (wrong property name caused AttributeError); moved `Habit` import to top of file; added `timezone.utc` fallback when user has no timezone set; fixed `%s` logger format → loguru `{}` |
-| `app/bot/routers/chat.py` | Fixed `%s` logger format → loguru `{}` in exception handlers |
-| `app/services/memory_orchestrator.py` | Parallelised all four independent DB/vector queries using `asyncio.gather()` — reduces memory assembly latency by ~3× under load; fixed `Optional[List]` type hint → `Optional[List[Any]]` |
+| `803a95fd0d9e` | Initial structure |
+| `16c8dbaee964` | Add created_at fields to core memory |
+| `8edfc37203e1` | Add plans table |
+| `962e790beaf7` | Add subscription fields |
+| `fc08a8eb9107` | Add core_fact and core_fact_emb |
+| `20251204` | Add CoreFact table |
+| `20251212` | Vector 4096 dimensions |
+| `20260128` | Add vector indexes |
+| `20260226` | Add user_triggers table |
+| `20260228` | Add search/news digest settings |
+| `20260301` | Add userbot_session and settings |
+| `51d1ea426c9b` | Merge heads |
 
-### New Features Added
+---
 
-#### 1. Group Chat Support (`app/bot/routers/group.py`)
+## Dependencies (pyproject.toml)
 
-The bot now works inside Telegram groups and supergroups. It responds **only** when explicitly addressed:
+Key production dependencies beyond the standard web/DB stack:
 
-- User sends a message that contains `@botusername`
-- User replies to one of the bot's own messages
-
-All other group messages are silently ignored (no eavesdropping). The full per-user memory/subscription/history pipeline runs as normal — memories are stored under the user's personal profile (DM-first approach).
-
-**Router registration:** `group_router` is registered in `dispatcher.py` before `multimodal_router` and `chat_router` but after all command routers, so commands still take priority.
-
-**Key functions in `group.py`:**
-- `_is_group_message(message)` — filter: only fires on group/supergroup chats
-- `_bot_is_mentioned(message, bot)` — checks reply-to-bot and @mention
-- `_strip_bot_mention(text, bot_username)` — removes @mention noise before LLM sees the text
-
-#### 2. Sandboxed Code Execution (`app/services/code_executor_service.py`)
-
-The LLM can now run code on behalf of users inside an isolated Docker container. This is exposed as the `execute_code` LLM tool (see `tool_schemas.py` and `tool_executor.py`).
-
-**Safety measures (all enforced at the Docker level):**
-
-| Control | Value |
+| Package | Purpose |
 |---|---|
-| Network | `--network=none` (completely disabled) |
-| Filesystem | `--read-only` root + small `/tmp` tmpfs |
-| Memory | `--memory=128m` (hard limit, swap disabled) |
-| CPU | `--cpu-quota` = 0.5 cores |
-| Process limit | `--pids-limit=64` (prevents fork bombs) |
-| Linux capabilities | `--cap-drop=ALL` |
-| Privilege escalation | `--security-opt=no-new-privileges` |
-| User | `-u nobody` (non-root) |
-| Wall-clock timeout | 10 seconds (container force-killed) |
-| Output cap | 8 KB |
-| Container lifetime | `--rm` (auto-deleted after exit) |
-
-**Supported languages:**
-
-| Language key | Docker image |
-|---|---|
-| `python` / `python3` | `python:3.11-alpine` |
-| `javascript` / `js` | `node:20-alpine` |
-| `bash` / `sh` | `alpine:3` |
-
-**Pre-pull images on the host** for fast cold starts:
-```bash
-docker pull python:3.11-alpine
-docker pull node:20-alpine
-docker pull alpine:3
-```
-
-**Configuration:** Timeout, memory, and CPU limits are hardcoded as constants in `code_executor_service.py`; move to `config.py` if you need env-based tunability.
+| `telethon` | MTProto client for Telegram userbot |
+| `httpx` | Async HTTP client (used by SearchService for Tavily API) |
+| `tink` | Google Tink AEAD encryption |
+| `cryptography` | Fernet encryption for OAuth tokens |
+| `faster-whisper` | Speech-to-text |
+| `python-docx` | Word document generation (also in sandbox) |
+| `pillow` | Image processing |
+| `ffmpeg-python` + `av` | Audio/video processing |
+| `pgvector` | PostgreSQL vector similarity search |
+| `apscheduler` | Cron-style job scheduling |
+| `redis` | Session storage, caching, rate limiting |
 
 ---
 
 ## Future Feature Roadmap
 
-### Near-term (next sprint)
+### Near-term
 
 | Feature | Description | Key files to touch |
 |---|---|---|
-| **Alembic migration for group chats** | Add `group_id` column to conversation history (optional, for per-group context isolation) | `app/models/`, `alembic/versions/` |
-| **Code execution rate-limiting** | Prevent users from spamming the sandbox; count executions per user per day in Redis | `app/middleware/rate_limit.py`, `code_executor_service.py` |
-| **Subscription gate for code exec** | Only Trial/Premium users can run code; expired users see upsell | `app/services/code_executor_service.py`, `tool_executor.py` |
-| **Inline keyboard for habit logging** | Replace `/log_habit <id>` text command with buttons in `/habits` response | `app/bot/routers/habits.py` |
-| **File/image output from code exec** | Allow matplotlib/PIL to save plots and send them as Telegram photos | `app/services/code_executor_service.py`, `app/bot/routers/group.py` |
+| **Alembic migration for group chats** | Add `group_id` column to conversation history (for per-group context isolation) | `app/models/`, `alembic/versions/` |
+| **File/image output from code exec** | Extend JS/bash sandbox to support file output | `app/services/code_executor_service.py` |
 
 ### Medium-term
 
@@ -483,8 +668,6 @@ docker pull alpine:3
 |---|---|
 | **Web dashboard** | React/Next.js read-only dashboard showing habits, streaks, memory stats; protected by Telegram Login Widget |
 | **Notion / Obsidian export** | Export core memory, habits, and episodes to Markdown or Notion pages via API |
-| **Custom proactive flow triggers** | Let users define their own recurring prompts (e.g., "every Friday at 17:00 ask me about my week") |
-| **Multi-language bot** | Auto-detect user language from onboarding and load `moti_system_eng.txt` or `moti_system.txt` accordingly |
 | **Per-group personality** | Group admins can configure a group-specific system prompt addon (e.g., team stand-up facilitator mode) |
 | **Shared group habits** | Habit challenges that multiple group members can join and track together |
 
