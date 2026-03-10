@@ -4,6 +4,7 @@ from aiogram.types import Message
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 
+from ...config import settings as app_settings
 from ...services.profile_services import get_or_create_user
 from ...services.settings_service import SettingsService
 
@@ -27,8 +28,20 @@ async def break_cmd(message: Message, session):
         settings.touch()
         session.add(settings)
         await session.commit()
-        
-        await message.answer("🔔 Режим перерыва отключен. Я возобновлю проактивные сообщения!")
+
+        if app_settings.is_feature_enabled("F011_BREAK_ENHANCED"):
+            streak_msg = ""
+            if app_settings.is_feature_enabled("F006_STREAKS") and user.streak_count > 0:
+                streak_msg = (
+                    f"\n🔥 Your streak survived thanks to break protection! "
+                    f"Current streak: {user.streak_count} days."
+                )
+            await message.answer(
+                f"🔔 Welcome back! I'm glad you're here.{streak_msg}\n\n"
+                f"Let me know how you're doing and we'll get back on track together."
+            )
+        else:
+            await message.answer("🔔 Режим перерыва отключен. Я возобновлю проактивные сообщения!")
         return
     
     # Parse duration
@@ -56,10 +69,27 @@ async def break_cmd(message: Message, session):
     session.add(settings)
     await session.commit()
     
-    await message.answer(
-        f"🔕 Режим перерыва активен до {until.strftime('%Y-%m-%d %H:%M UTC')}.\n"
-        f"Я не буду отправлять проактивные сообщения до этого времени. Используй /break off, чтобы возобновить когда угодно."
-    )
+    if app_settings.is_feature_enabled("F011_BREAK_ENHANCED"):
+        # Freeze streak during break
+        if app_settings.is_feature_enabled("F006_STREAKS"):
+            try:
+                from ...services.streak_service import StreakService
+                await StreakService.freeze_streak_for_break(session, user)
+            except Exception as e:
+                logger.warning("Failed to freeze streak for user {}: {}", user.id, e)
+
+        await message.answer(
+            f"🔕 Taking a break is healthy. I'll keep your streaks frozen "
+            f"and your memories safe until {until.strftime('%Y-%m-%d %H:%M UTC')}.\n\n"
+            f"When you're ready, just say hi and I'll catch you up on everything. "
+            f"Use /break off to come back anytime."
+        )
+    else:
+        await message.answer(
+            f"🔕 Режим перерыва активен до {until.strftime('%Y-%m-%d %H:%M UTC')}.\n"
+            f"Я не буду отправлять проактивные сообщения до этого времени. "
+            f"Используй /break off, чтобы возобновить когда угодно."
+        )
     logger.info("User {} activated break mode until {}", user.id, until)
 
 @router.message(F.text == "/export_data")

@@ -225,6 +225,81 @@ async def cleanup_expired_memories_job():
         await session.close()
 
 
+async def memory_reveal_job(user_id: int, day: int):
+    """Run progressive memory reveal (day 3 or day 7)."""
+    logger.info("Running memory reveal day {} for user {}", day, user_id)
+    try:
+        from ..services.memory_reveal_service import MemoryRevealService
+        await MemoryRevealService.run_memory_reveal(user_id, day)
+    except Exception as e:
+        logger.exception("Error in memory_reveal_job for user {}: {}", user_id, e)
+
+
+async def insight_job(user_id: int):
+    """Generate and send a Motivi Knows insight card."""
+    logger.info("Running insight job for user {}", user_id)
+    try:
+        from ..services.insight_service import InsightService
+        await InsightService.generate_insight(user_id)
+    except Exception as e:
+        logger.exception("Error in insight_job for user {}: {}", user_id, e)
+
+
+async def premium_taste_job(user_id: int):
+    """Send premium feature taste conversion prompt on trial day 5."""
+    logger.info("Running premium taste job for user {}", user_id)
+    try:
+        from ..services.premium_taste_service import PremiumTasteService
+        await PremiumTasteService.send_premium_taste(user_id)
+    except Exception as e:
+        logger.exception("Error in premium_taste_job for user {}: {}", user_id, e)
+
+
+async def memory_decay_warning_job():
+    """Check for decaying working memories and send gentle notifications."""
+    from ..config import settings as app_settings
+    if not app_settings.is_feature_enabled("F028_MEMORY_DECAY_WARNING"):
+        return
+    logger.info("Running memory decay warning job")
+    session = AsyncSessionLocal()
+    try:
+        warning_cutoff = (datetime.now(timezone.utc) + timedelta(days=2)).date()
+        today = datetime.now(timezone.utc).date()
+        result = await session.execute(
+            select(WorkingMemory).where(
+                WorkingMemory.decay_date != None,
+                WorkingMemory.decay_date <= warning_cutoff,
+                WorkingMemory.decay_date > today,
+                WorkingMemory.working_memory_text != None,
+            )
+        )
+        entries = result.scalars().all()
+        warned_users = set()
+        for entry in entries:
+            if entry.user_id in warned_users:
+                continue
+            if await _is_break_mode_active(session, entry.user_id):
+                continue
+            user = await session.get(User, entry.user_id)
+            if not user:
+                continue
+            bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+            try:
+                await bot.send_message(
+                    user.tg_chat_id,
+                    "🧠 Some of your recent context is fading from my working memory. "
+                    "Chat with me today to keep it fresh!"
+                )
+            finally:
+                await bot.session.close()
+            warned_users.add(entry.user_id)
+            logger.info("Sent memory decay warning to user {}", entry.user_id)
+    except Exception as e:
+        logger.exception("Error in memory_decay_warning_job: {}", e)
+    finally:
+        await session.close()
+
+
 async def archive_raw_conversations_job():
     """Archive raw conversation history from Redis to Episodes."""
     logger.info("Running archive_raw_conversations_job")

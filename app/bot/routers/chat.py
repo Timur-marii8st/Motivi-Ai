@@ -147,6 +147,13 @@ async def handle_chat(message: Message, session):
         except Exception as e:
             logger.exception("Failed to store episode for user {}: {}", user.id, e)
 
+        # ── Post-message gamification (streaks, milestones, XP) ──
+        try:
+            from ...services.post_message_handler import handle_post_message_gamification
+            await handle_post_message_gamification(session, user, message.chat.id)
+        except Exception as e:
+            logger.exception("Post-message gamification failed for user {}: {}", user.id, e)
+
         try:
             await fact_cleanup_service.clear_duplicate_facts(session, user.id)
             logger.info("Cleared duplicate facts for user {}", user.id)

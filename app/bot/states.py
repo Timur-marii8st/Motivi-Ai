@@ -32,3 +32,15 @@ class UserBotSetup(StatesGroup):
     waiting_phone = State()     # waiting for E.164 phone number
     waiting_code = State()      # waiting for the OTP sent by Telegram
     waiting_password = State()  # waiting for 2FA cloud password (if enabled)
+
+
+class HabitStacking(StatesGroup):
+    """FSM for confirming habit stacking suggestions."""
+    confirm_stack = State()
+
+
+class PersonaCustomization(StatesGroup):
+    """FSM for persona customization flow."""
+    select_tone = State()
+    select_emoji = State()
+    select_length = State()

@@ -21,6 +21,10 @@ from .routers.subscription import router as subscription_router
 from .routers.group import router as group_router
 from .routers.triggers import router as triggers_router
 from .routers.userbot import router as userbot_router
+from .routers.gamification import router as gamification_router
+from .routers.referral import router as referral_router
+from .routers.story import router as story_router
+from .routers.memories import router as memories_router
 
 def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -49,6 +53,10 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     dp.include_router(group_router)
     dp.include_router(triggers_router)
     dp.include_router(userbot_router)
+    dp.include_router(gamification_router)
+    dp.include_router(referral_router)
+    dp.include_router(story_router)
+    dp.include_router(memories_router)
     dp.include_router(multimodal_router)
     dp.include_router(chat_router)
     dp.include_router(common_router)

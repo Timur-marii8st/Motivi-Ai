@@ -76,16 +76,50 @@ class ProactiveFlows:
             logger.exception("Failed to extract info from proactive flow for user {}: {}", user.id, e)
 
     async def morning_checkin(self, user: User):
-        """Morning check-in: greet, suggest top tasks, motivate."""
+        """Morning check-in: greet, suggest top tasks, motivate.
+
+        Enhanced with adaptive tone (F014) and morning challenges (F015).
+        """
         logger.info("Morning check-in for user {}", user.id)
         try:
+            import random
+
+            prompt = (
+                "It's morning. Help me plan my day. "
+                "Check my recent episodes, suggest 3 top-priority tasks, and motivate me."
+            )
+
+            # ── Adaptive Morning Tone (F014) ──
+            if settings.is_feature_enabled("F014_ADAPTIVE_TONE"):
+                try:
+                    from ..services.mood_service import get_morning_mood_context
+                    mood_ctx = await get_morning_mood_context(user.id)
+                    if mood_ctx:
+                        prompt = f"{mood_ctx}\n\n{prompt}"
+                except Exception as e:
+                    logger.warning("Mood context failed for user {}: {}", user.id, e)
+
+            # ── Morning Challenge Cards (F015) — ~40% chance ──
+            if settings.is_feature_enabled("F015_MORNING_CHALLENGES") and random.random() < 0.4:
+                prompt += (
+                    "\n\nAlso include a small, achievable challenge for today "
+                    "based on my goals and habits. Frame it as "
+                    "'🎯 Today\\'s challenge: [specific action]'. "
+                    "Make it relevant to my current context."
+                )
+
+            # ── Streak info in greeting ──
+            greeting = f"Good morning, {user.name}! \u2600\ufe0f"
+            if settings.is_feature_enabled("F006_STREAKS"):
+                from ..services.streak_service import StreakService
+                streak_display = StreakService.get_streak_display(user)
+                if streak_display:
+                    greeting += f"\n{streak_display}"
+
             await self._run_flow(
                 user=user,
-                prompt=(
-                    "It's morning. Help me plan my day. "
-                    "Check my recent episodes, suggest 3 top-priority tasks, and motivate me."
-                ),
-                greeting=f"Good morning, {user.name}! \u2600\ufe0f",
+                prompt=prompt,
+                greeting=greeting,
                 top_k=5,
             )
             logger.info("Morning check-in sent to user {}", user.id)
@@ -94,7 +128,10 @@ class ProactiveFlows:
             raise
 
     async def evening_wrapup(self, user: User):
-        """Evening wrap-up: reflect, log wins, encourage."""
+        """Evening wrap-up: reflect, log wins, encourage.
+
+        Also extracts mood signal for adaptive morning tone (F014).
+        """
         logger.info("Evening wrap-up for user {}", user.id)
         try:
             await self._run_flow(
@@ -107,6 +144,23 @@ class ProactiveFlows:
                 top_k=5,
             )
             logger.info("Evening wrap-up sent to user {}", user.id)
+
+            # ── Extract mood for adaptive morning tone (F014) ──
+            if settings.is_feature_enabled("F014_ADAPTIVE_TONE"):
+                try:
+                    from ..services.mood_service import extract_mood, store_mood_signal
+                    history = await ConversationHistoryService.get_history(user.tg_chat_id)
+                    if history:
+                        recent_text = "\n".join(
+                            m.get("content", "")
+                            for m in history[-10:]
+                            if m.get("content")
+                        )
+                        mood = await extract_mood(recent_text)
+                        await store_mood_signal(user.id, mood)
+                        logger.info("Stored mood '{}' for user {}", mood, user.id)
+                except Exception as e:
+                    logger.warning("Mood extraction failed for user {}: {}", user.id, e)
         except Exception as e:
             logger.exception("Error sending evening wrap-up to user {}: {}", user.id, e)
             raise

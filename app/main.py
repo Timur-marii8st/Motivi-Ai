@@ -31,6 +31,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()
     start_scheduler()
 
+    # ── Register gamification event listeners ──
+    from .services.event_bus import event_bus
+    from .services.analytics_service import persist_event
+    event_bus.on_all(persist_event)  # Analytics sink — logs all events to DB
+
+    # Import gamification modules to wire their event bus listeners
+    import app.services.gamification.xp_service  # noqa: F401
+    import app.services.gamification.badge_service  # noqa: F401
+    import app.services.gamification.reward_service  # noqa: F401
+    import app.services.gamification.leaderboard_service  # noqa: F401
+    logger.info("Gamification event listeners registered")
+
     # Start MTProto userbot clients (read-only monitoring of connected accounts)
     from .services.userbot_manager import UserBotManager
     await UserBotManager.start_all(bot)

@@ -473,6 +473,16 @@ class ToolExecutor:
             if current_count == 1:
                 await redis.expire(counter_key, 86400 + 3600)
             if current_count > limit:
+                if settings.is_feature_enabled("F010_CONTEXTUAL_UPGRADE"):
+                    return {
+                        "success": False,
+                        "error": (
+                            f"You've used all {limit} code executions today. "
+                            f"I was ready to help you with that — unlock "
+                            f"{settings.CODE_EXEC_DAILY_PREMIUM} daily executions "
+                            f"with Premium! Use /subscribe to upgrade."
+                        ),
+                    }
                 return {
                     "success": False,
                     "error": f"Daily code execution limit reached ({limit}/day). Try again tomorrow.",
@@ -553,6 +563,15 @@ class ToolExecutor:
             is_admin=(status == "admin"),
         )
         if not allowed:
+            if settings.is_feature_enabled("F010_CONTEXTUAL_UPGRADE"):
+                return {
+                    "success": False,
+                    "error": (
+                        f"You've hit your daily search limit of {limit}. "
+                        f"Unlock {settings.SEARCH_DAILY_PREMIUM} daily searches "
+                        f"with Premium! Use /subscribe to upgrade."
+                    ),
+                }
             return {
                 "success": False,
                 "error": (
