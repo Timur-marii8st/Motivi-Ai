@@ -17,7 +17,7 @@ Strategy:
 """
 from __future__ import annotations
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 from loguru import logger
@@ -95,7 +95,7 @@ def _strip_bot_mention(text: str, bot_username: str) -> str:
 
 # --- Handler ---
 
-@router.message()
+@router.message(F.chat.type.in_({"group", "supergroup"}))
 async def handle_group_message(message: Message, session, bot: Bot):
     """
     Entry point for all group/supergroup text messages.
@@ -153,7 +153,7 @@ async def handle_group_message(message: Message, session, bot: Bot):
             await message.reply("Извини, не могу вспомнить контекст прямо сейчас. Попробуй ещё раз.")
             return
 
-        tool_executor = ToolExecutor(session)
+        tool_executor = ToolExecutor(session, bot=bot)
 
         # Add current time context (same pattern as private chat handler)
         try:

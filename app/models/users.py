@@ -40,6 +40,10 @@ class User(SQLModel, table=True):
         default=None,
         sa_column=Column(EncryptedJSONType("users.occupation")),
     )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+    )
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

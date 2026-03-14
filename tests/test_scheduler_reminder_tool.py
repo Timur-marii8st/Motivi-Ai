@@ -131,11 +131,8 @@ def test_scheduler_job_runs_async(monkeypatch):
         async def fake_send_message(chat_id, message):
             event.set()
 
-        class FakeBot:
-            def __init__(self, *_, **__):
-                self.send_message = fake_send_message
-
-        monkeypatch.setattr('aiogram.Bot', FakeBot)
+        fake_bot = MagicMock(send_message=fake_send_message)
+        monkeypatch.setattr('app.scheduler.jobs.get_bot_instance', lambda: fake_bot)
         # Prevent DB queries inside job by monkeypatching AsyncSessionLocal and break mode checker
         fake_session_for_job = AsyncMock()
         class FakeUserSmall:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, String
 from sqlmodel import Field, SQLModel
 
 from ..security.encrypted_types import EncryptedTextType
@@ -35,6 +35,10 @@ class UserBotSession(SQLModel, table=True):
         sa_column=Column(
             EncryptedTextType("userbot_sessions.phone_number"), nullable=True
         ),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
 
     is_active: bool = Field(default=True)

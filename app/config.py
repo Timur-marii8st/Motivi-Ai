@@ -42,6 +42,9 @@ class Settings(BaseSettings):
         ...,
         description="Base64-encoded JSON keyset for Tink AEAD (AES256_GCM by default)",
     )
+    # Row-level integrity verification mode.
+    # When True, any tracked row without integrity_sig is rejected on load.
+    INTEGRITY_STRICT_MODE: bool = True
     
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
@@ -103,6 +106,8 @@ class Settings(BaseSettings):
     TELEGRAM_API_HASH: str = ""
     # Max notifications per channel per user per day (anti-flood)
     USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY: int = 5
+    # Safety cap for active Telethon clients in one process.
+    USERBOT_MAX_ACTIVE_CLIENTS: int = 100
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".

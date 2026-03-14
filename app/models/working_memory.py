@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, date
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, String
 from pgvector.sqlalchemy import Vector
 
 from ..security.encrypted_types import EncryptedTextType
@@ -29,6 +29,10 @@ class WorkingMemory(SQLModel, table=True):
         ),
     )
     history_order: Optional[int] = Field(default=None, index=True)
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+    )
 
     decay_date: Optional[date] = Field(default=None, index=True)
     created_at: datetime = Field(
@@ -61,6 +65,10 @@ class WorkingMemoryEntry(SQLModel, table=True):
         ),
     )
     history_order: Optional[int] = Field(default=None, index=True)
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+    )
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

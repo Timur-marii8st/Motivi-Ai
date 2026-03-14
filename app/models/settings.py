@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, time
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, String
 
 from ..security.encrypted_types import EncryptedJSONType
 
@@ -61,6 +61,10 @@ class UserSettings(SQLModel, table=True):
         default=None,
         sa_column=Column(EncryptedJSONType("user_settings.summary_preferences")),
     )  # e.g., {"include_habits": true, "include_calendar": true}
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+    )
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

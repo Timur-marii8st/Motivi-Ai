@@ -3,10 +3,9 @@ from datetime import datetime, timedelta, timezone, date
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, delete
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
 
 from ..db import AsyncSessionLocal
+from ..bot.bot_provider import get_bot_instance
 from ..models.users import User
 from ..models.habit import Habit, HabitLog
 from ..models.settings import UserSettings
@@ -29,7 +28,7 @@ async def _run_proactive_job(user_id: int, method_name: str) -> None:
         if not user:
             logger.warning("User {} not found for {}", user_id, method_name)
             return
-        flows = ProactiveFlows(session)
+        flows = ProactiveFlows(session, bot=get_bot_instance())
         await getattr(flows, method_name)(user)
         await session.commit()
     except Exception as e:
@@ -80,7 +79,7 @@ async def custom_trigger_job(user_id: int, trigger_id: int):
         if not trigger or not trigger.active:
             logger.info("Trigger {} is inactive or missing; skipping", trigger_id)
             return
-        flows = ProactiveFlows(session)
+        flows = ProactiveFlows(session, bot=get_bot_instance())
         await flows._run_flow(user=user, prompt=trigger.prompt, greeting=f"⏰ <b>{trigger.name}</b>")
         await session.commit()
     except Exception as e:
@@ -102,12 +101,9 @@ async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: st
         if not user:
             logger.warning("User {} not found for one-off reminder", user_id)
             return
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-        try:
-            await bot.send_message(chat_id, message_text)
-            logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
-        finally:
-            await bot.session.close()
+        bot = get_bot_instance()
+        await bot.send_message(chat_id, message_text)
+        logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
     except Exception as e:
         logger.exception("Error in send_one_off_reminder_job for user {}: {}", user_id, e)
         await session.rollback()
@@ -153,17 +149,14 @@ async def habit_reminder_job(habit_id: int):
         user = await session.get(User, habit.user_id)
         if not user:
             return
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        bot = get_bot_instance()
         message = (
             f"\u23f0 Habit Reminder: <b>{habit.name}</b>\n\n"
             f"Don't forget! Current streak: {habit.current_streak} \U0001f525\n"
             f"Reply with /log_habit {habit.id} to mark as done."
         )
-        try:
-            await bot.send_message(user.tg_chat_id, message)
-            logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
-        finally:
-            await bot.session.close()
+        await bot.send_message(user.tg_chat_id, message)
+        logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
     except Exception as e:
         logger.exception("Error in habit_reminder_job for habit {}: {}", habit_id, e)
         await session.rollback()

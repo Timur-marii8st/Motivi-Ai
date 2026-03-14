@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, String
 from pgvector.sqlalchemy import Vector
 
 from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
@@ -26,6 +26,10 @@ class Episode(SQLModel, table=True):
     metadata_json: Optional[dict] = Field(
         default=None,
         sa_column=Column(EncryptedJSONType("episodes.metadata")),
+    )
+    integrity_sig: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
     )
 
     created_at: datetime = Field(

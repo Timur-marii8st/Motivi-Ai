@@ -86,6 +86,7 @@ class GoogleCalendarService:
                 try:
                     await asyncio.to_thread(creds.refresh, Request())
                     await GoogleCalendarService.store_credentials(session, user_id, creds)
+                    await session.commit()
                 except RefreshError as e:
                     # Token revoked/expired, mark as needing re-auth
                     logger.warning(
@@ -96,7 +97,7 @@ class GoogleCalendarService:
                     if hasattr(token_record, "needs_reauth"):
                         token_record.needs_reauth = True
                         session.add(token_record)
-                        await session.flush()
+                        await session.commit()
                     return None
                 except Exception:
                     logger.exception("Failed to refresh Google credentials for user %s", user_id)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import settings
 from .db import init_db
 from .bot.dispatcher import create_bot_and_dispatcher
+from .bot.bot_provider import set_bot_instance
 from .scheduler.scheduler_instance import start_scheduler, shutdown_scheduler, scheduler
 
 from .services.oauth_state_service import OAuthStateService
@@ -21,6 +22,7 @@ from .models.episode import Episode
 
 
 bot, dp = create_bot_and_dispatcher()
+set_bot_instance(bot)
 
 
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -70,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass
     logger.info("Motivi_AI shut down")
+    set_bot_instance(None)
 
 
 app = FastAPI(title="Motivi_AI", lifespan=lifespan)

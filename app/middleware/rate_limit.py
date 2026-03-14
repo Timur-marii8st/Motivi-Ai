@@ -93,10 +93,11 @@ class RateLimitMiddleware(BaseMiddleware):
         today_str = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime("%Y-%m-%d")
         quota_key = f"quota:{tg_user_id}:{today_str}"
         
-        current_usage = await self.redis.incr(quota_key)
-        
-        if current_usage == 1:
-            await self.redis.expire(quota_key, 86400 + 3600)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.incr(quota_key)
+            pipe.execute_command("EXPIRE", quota_key, 86400 + 3600, "NX")
+            pipe_result = await pipe.execute()
+        current_usage = int(pipe_result[0])
         
         if current_usage > limit:
             # Quota exceeded

@@ -35,6 +35,7 @@ def test_schedule_user_jobs_registers_cron_jobs(monkeypatch):
             self.enable_evening_wrapup = True
             self.enable_weekly_plan = False
             self.enable_monthly_plan = False
+            self.enable_news_digest = False
 
     user = SimpleUser()
     settings = SimpleSettings()
@@ -74,9 +75,10 @@ def test_evening_wrapup_job_calls_flow_when_not_in_break_mode(monkeypatch):
 
     monkeypatch.setattr("app.scheduler.jobs.AsyncSessionLocal", lambda: fake_session)
     monkeypatch.setattr("app.scheduler.jobs._is_break_mode_active", AsyncMock(return_value=False))
+    monkeypatch.setattr("app.scheduler.jobs.get_bot_instance", lambda: MagicMock())
 
     flows_mock = AsyncMock()
-    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session: flows_mock)
+    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session, bot=None: flows_mock)
 
     asyncio.run(evening_wrapup_job(user_id=123))
 
