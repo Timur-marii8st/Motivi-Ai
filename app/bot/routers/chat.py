@@ -115,13 +115,15 @@ async def handle_chat(message: Message, session):
         time_block = f"<KnowledgeBase>Current time: {user_time}</KnowledgeBase>"
         user_text = f"{user_text}\n\n{time_block}"
 
-        # Resolve user language preference
+        # Resolve user language preference and persona
         language = "ru"
+        persona_id = "strict"
         try:
             user_settings = await SettingsService.get_or_create(session, user.id)
             language = (user_settings.summary_preferences_json or {}).get("language", "ru")
+            persona_id = user_settings.bot_persona or "strict"
         except Exception as e:
-            logger.warning("Failed to load user settings for language for user {}: {}", user.id, e)
+            logger.warning("Failed to load user settings for user {}: {}", user.id, e)
 
         # Generate response and get updated history
         reply, updated_history = await conversation_service.respond_with_tools(
@@ -133,6 +135,7 @@ async def handle_chat(message: Message, session):
             conversation_history=history,
             language=language,
             forced_tool_choice=forced_tool_choice,
+            persona_id=persona_id,
         )
 
         await message.answer(reply)

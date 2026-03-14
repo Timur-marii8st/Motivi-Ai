@@ -14,8 +14,13 @@ from ..services.tool_executor import ToolExecutor
 from ..services.profile_completeness_service import ProfileCompletenessService
 from .client import async_client
 
-PERSONA_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "moti_system.txt"
-PERSONA_PROMPT_ENG_PATH = Path(__file__).parent.parent / "prompts" / "moti_system_eng.txt"
+_PERSONAS_DIR = Path(__file__).parent.parent / "prompts" / "personas"
+_LEGACY_PROMPT_RU = Path(__file__).parent.parent / "prompts" / "moti_system.txt"
+_LEGACY_PROMPT_EN = Path(__file__).parent.parent / "prompts" / "moti_system_eng.txt"
+_DEFAULT_FALLBACK = "You are Motivi, a proactive planning assistant."
+
+VALID_PERSONAS = {"strict", "friendly", "coach", "zen", "hype"}
+
 
 class ConversationService:
     """
@@ -24,18 +29,30 @@ class ConversationService:
 
     def __init__(self):
         self.client = async_client
-        self.persona_prompt_ru = self._load_prompt(PERSONA_PROMPT_PATH, "You are Motivi, a proactive planning assistant.")
-        self.persona_prompt_en = self._load_prompt(PERSONA_PROMPT_ENG_PATH, "You are Motivi, a proactive planning assistant.")
+        # Cache: (persona_id, language) -> prompt text
+        self._prompt_cache: dict[tuple[str, str], str] = {}
 
     def _load_prompt(self, path: Path, fallback: str) -> str:
         if path.exists():
             return path.read_text(encoding="utf-8")
         return fallback
 
-    def _get_persona(self, language: str) -> str:
-        if language == "en":
-            return self.persona_prompt_en
-        return self.persona_prompt_ru
+    def _get_persona(self, language: str, persona_id: str = "strict") -> str:
+        lang = language if language in ("ru", "en") else "ru"
+        pid = persona_id if persona_id in VALID_PERSONAS else "strict"
+        cache_key = (pid, lang)
+
+        if cache_key not in self._prompt_cache:
+            persona_path = _PERSONAS_DIR / f"{pid}_{lang}.txt"
+            if persona_path.exists():
+                self._prompt_cache[cache_key] = persona_path.read_text(encoding="utf-8")
+            else:
+                # Fallback to legacy prompts
+                logger.warning("Persona file not found: {}; falling back to legacy prompt", persona_path)
+                fallback_path = _LEGACY_PROMPT_EN if lang == "en" else _LEGACY_PROMPT_RU
+                self._prompt_cache[cache_key] = self._load_prompt(fallback_path, _DEFAULT_FALLBACK)
+
+        return self._prompt_cache[cache_key]
     
     @staticmethod
     def _clean_json(json_str: str) -> str:
@@ -53,6 +70,7 @@ class ConversationService:
         max_iterations: int = 5,
         language: str = "ru",
         forced_tool_choice: Optional[Any] = None,
+        persona_id: str = "strict",
     ) -> Tuple[str, List[dict]]:
         """
         Generate a response with potential tool calls using the OpenAI compatible API.
@@ -61,7 +79,7 @@ class ConversationService:
         """
         context_dict = memory_pack.to_context_dict()
         context_block = f"<UserContext>\n{json.dumps(context_dict, indent=2, ensure_ascii=False)}\n</UserContext>"
-        persona = self._get_persona(language)
+        persona = self._get_persona(language, persona_id)
 
         skills_snippet = SkillsService.get_skills_prompt_snippet()
 

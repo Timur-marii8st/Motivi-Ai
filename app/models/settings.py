@@ -46,6 +46,13 @@ class UserSettings(SQLModel, table=True):
     # Free-text description of topics the user finds interesting (fed to LLM filter)
     userbot_channel_interests: Optional[str] = Field(default=None)
 
+    # Bot persona: controls which system prompt style is used
+    # Values: "strict", "friendly", "coach", "zen", "hype"
+    bot_persona: str = Field(
+        default="strict",
+        sa_column=Column(String(30), nullable=False, server_default="strict"),
+    )
+
     # ── Gamification toggles ────────────────────────────────
     show_on_leaderboard: bool = Field(default=True)
     hide_streak: bool = Field(default=False)

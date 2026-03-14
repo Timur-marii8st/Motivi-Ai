@@ -16,3 +16,6 @@ __pycache__/
 
 .DS_Store
 Thumbs.db
+
+# Nginx Proxy Manager data (contains keys, certs, sqlite DB)
+npm_data/

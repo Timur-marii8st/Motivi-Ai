@@ -61,6 +61,25 @@ HNSW indexes are optimized for specific dimensions. After changing dimensions:
 2. Recreate with new dimension
 3. Consider adjusting HNSW parameters (m, ef_construction) for optimal performance
 
+**Important**: HNSW has a **2000 dimension limit** in pgvector. For vectors with >2000 dimensions (like our 4096), use **IVFFlat** instead:
+
+```sql
+-- For dimensions > 2000, use IVFFlat
+CREATE INDEX ON episode_embeddings 
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- For dimensions <= 2000, use HNSW
+CREATE INDEX ON episode_embeddings 
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
+
+**IVFFlat tuning**:
+- `lists`: Number of clusters. Good starting point: `sqrt(total_rows)` or 100-1000
+- Larger `lists` = better recall but slower build time
+- Smaller `lists` = faster queries but lower recall
+
 ## Troubleshooting
 
 ### Error: "value has X dimensions, not Y"
