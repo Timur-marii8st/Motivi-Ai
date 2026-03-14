@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, LabeledPrice, PreCheckoutQuery, ContentType
 from loguru import logger
 from datetime import datetime, timezone
+from redis.asyncio import Redis
 
 from ...config import settings
 from ...services.profile_services import get_or_create_user
@@ -66,6 +67,15 @@ async def successful_payment_handler(message: Message, session):
     # Add 1 month subscription
     await SubscriptionService.add_subscription_time(session, user, months=1)
     await session.commit()
+
+    # Invalidate cached subscription status so rate limiter immediately
+    # recognises the user as premium (cache TTL is 5 min otherwise).
+    try:
+        redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        await redis.delete(f"sub_cache:{message.from_user.id}")
+        await redis.aclose()
+    except Exception as e:
+        logger.warning("Failed to invalidate sub cache for user {}: {}", user.id, e)
 
     await message.answer(
         f"🎉 <b>Оплата прошла успешно!</b>\n\n"

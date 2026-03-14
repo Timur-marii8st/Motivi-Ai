@@ -35,6 +35,11 @@ class RateLimitMiddleware(BaseMiddleware):
         if event.text and any(event.text.startswith(cmd) for cmd in ["/subscribe", "/start", "/help"]):
              return await handler(event, data)
 
+        # Allow successful_payment messages through — they must reach the
+        # subscription handler so the user actually receives premium status.
+        if event.successful_payment:
+            return await handler(event, data)
+
         tg_user_id = event.from_user.id
         
         # --- Tier A: Technical Limit (Anti-Spam) ---
