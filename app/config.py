@@ -1,5 +1,13 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+
+from app.services.gamification.schemas import FEATURE_FLAG_DEFAULTS
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -101,10 +109,42 @@ class Settings(BaseSettings):
     # Safety cap for active Telethon clients in one process.
     USERBOT_MAX_ACTIVE_CLIENTS: int = 100
 
+    # ── Feature Flags ─────────────────────────────────────────
+    # JSON string or comma-separated "KEY=true,KEY2=false".
+    # Unset keys default to False (dark launch).
+    FEATURE_FLAGS_JSON: str = ""
+
     @property
     def admin_ids(self) -> list[int]:
         if not self.ADMIN_USER_IDS:
             return []
         return [int(x.strip()) for x in self.ADMIN_USER_IDS.split(",") if x.strip()]
+
+    @property
+    def feature_flags(self) -> dict[str, bool]:
+        """Merge defaults with env-provided overrides."""
+        flags = dict(FEATURE_FLAG_DEFAULTS)
+        raw = self.FEATURE_FLAGS_JSON.strip()
+        if not raw:
+            return flags
+        # Try JSON first
+        try:
+            overrides = json.loads(raw)
+            if isinstance(overrides, dict):
+                flags.update({k: bool(v) for k, v in overrides.items()})
+                return flags
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fall back to KEY=true,KEY2=false format
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                flags[k.strip()] = v.strip().lower() in ("true", "1", "yes")
+        return flags
+
+    def is_feature_enabled(self, flag_name: str) -> bool:
+        """Check a single feature flag.  Missing flags default to False."""
+        return self.feature_flags.get(flag_name, False)
 
 settings = Settings()

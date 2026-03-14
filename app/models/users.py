@@ -1,5 +1,5 @@
 from typing import Optional, List, TYPE_CHECKING
-from datetime import datetime, timezone, time, timedelta
+from datetime import datetime, timezone, time, date, timedelta
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
 from sqlalchemy import DateTime, Column, String
 from ..config import settings
@@ -58,6 +58,21 @@ class User(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
     )
+
+    # ── Gamification: Streaks ────────────────────────────────
+    streak_count: int = Field(default=0)
+    streak_freeze_tokens: int = Field(default=0)
+    last_active_date: Optional[date] = Field(default=None, index=True)
+
+    # ── Gamification: Referral ───────────────────────────────
+    referral_code: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(32), unique=True, nullable=True, index=True),
+    )
+    referred_by: Optional[int] = Field(default=None, foreign_key="users.id")
+
+    # ── Gamification: Memory milestones reached ──────────────
+    last_memory_milestone: int = Field(default=0)
 
     # --- Relationships ---
     # One-to-One relationships

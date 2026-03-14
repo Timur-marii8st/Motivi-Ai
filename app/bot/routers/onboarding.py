@@ -1,9 +1,13 @@
 from __future__ import annotations
+import asyncio
+
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
+from loguru import logger
 
+from ...config import settings
 from ...services.profile_services import get_or_create_user, update_user_profile
 from ...utils.validators import is_valid_timezone
 from ...utils.timeparse import parse_hhmm
@@ -34,9 +38,25 @@ WELCOME = (
 SKIP_TOKENS = {'/skip', 'skip', 'пропустить'}
 
 # === Handlers ===
-@router.message(F.text == "/start")
+@router.message(F.text.startswith("/start"))
 async def cmd_start(message: Message, state: FSMContext, session):
-    await get_or_create_user(session, tg_user_id=message.from_user.id, tg_chat_id=message.chat.id)
+    user = await get_or_create_user(session, tg_user_id=message.from_user.id, tg_chat_id=message.chat.id)
+
+    # Handle referral deep link: /start ref_XXXXX
+    text = message.text.strip()
+    if " " in text:
+        payload = text.split(" ", 1)[1].strip()
+        if payload.startswith("ref_"):
+            referral_code = payload[4:]
+            try:
+                from .referral import handle_referral_deep_link
+                await handle_referral_deep_link(session, referral_code, user.id)
+                await session.commit()
+            except Exception as e:
+                logger.exception("Referral deep link processing failed: {}", e)
+            # Store referral info in FSM for later use
+            await state.update_data(referral_code=referral_code)
+
     await message.answer(WELCOME)
     await state.set_state(Onboarding.name)
 
@@ -230,3 +250,42 @@ async def finalize_onboarding(message: Message, state: FSMContext, session):
     )
     await message.answer(summary)
     await state.clear()
+
+    # ── Onboarding Quick Win: suggest top 3 priorities immediately ──
+    if settings.is_feature_enabled("F008_ONBOARDING_QUICK_WIN"):
+        asyncio.create_task(_trigger_quick_win(user, session))
+
+    # ── Schedule memory reveals at day 3 and day 7 ──
+    try:
+        from ...services.memory_reveal_service import MemoryRevealService
+        MemoryRevealService.schedule_memory_reveals(user.id, user.created_at)
+    except Exception as e:
+        logger.exception("Failed to schedule memory reveals for user {}: {}", user.id, e)
+
+    # ── Schedule premium taste prompt at trial day 5 ──
+    try:
+        from ...services.premium_taste_service import PremiumTasteService
+        PremiumTasteService.schedule_trial_day5_job(user.id, user.created_at)
+    except Exception as e:
+        logger.exception("Failed to schedule premium taste for user {}: {}", user.id, e)
+
+
+async def _trigger_quick_win(user, session) -> None:
+    """Fire a mini morning check-in immediately after onboarding (background)."""
+    try:
+        from ...services.proactive_flows import ProactiveFlows
+
+        flows = ProactiveFlows(session)
+        await flows._run_flow(
+            user=user,
+            prompt=(
+                "The user just completed onboarding. Based on what you know about them, "
+                "suggest their top 3 priorities for today. Be concise and actionable. "
+                "This is their very first interaction with you beyond setup — make it count."
+            ),
+            greeting="Now that I know a bit about you, here are your priorities for today 🎯",
+            top_k=3,
+        )
+        logger.info("Quick win sent to user {}", user.id)
+    except Exception as e:
+        logger.exception("Quick win failed for user {}: {}", user.id, e)

@@ -46,6 +46,16 @@ class UserSettings(SQLModel, table=True):
     # Free-text description of topics the user finds interesting (fed to LLM filter)
     userbot_channel_interests: Optional[str] = Field(default=None)
 
+    # ── Gamification toggles ────────────────────────────────
+    show_on_leaderboard: bool = Field(default=True)
+    hide_streak: bool = Field(default=False)
+
+    # Persona customization (premium): tone, emoji_density, response_length
+    persona_preferences_json: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(EncryptedJSONType("user_settings.persona_preferences")),
+    )
+
     # Summary content preferences
     summary_preferences_json: Optional[dict] = Field(
         default=None,

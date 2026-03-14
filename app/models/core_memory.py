@@ -75,6 +75,7 @@ class CoreFact(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     core_memory_id: int = Field(index=True, foreign_key="core_memory.id")
     fact_text: str = Field(sa_column=Column(EncryptedTextType("core_facts.fact_text"), nullable=False))
+    category: Optional[str] = Field(default=None, max_length=50, index=True)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
