@@ -108,6 +108,13 @@ class Settings(BaseSettings):
     USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY: int = 5
     # Safety cap for active Telethon clients in one process.
     USERBOT_MAX_ACTIVE_CLIENTS: int = 100
+    # Pending reply approval timeout in seconds (after this, buttons expire)
+    USERBOT_REPLY_TIMEOUT: int = 600  # 10 minutes
+    # Max approved replies per user per day (anti-abuse)
+    USERBOT_MAX_REPLIES_PER_DAY: int = 50
+    # Min/max random delay before sending (seconds) — human-like behaviour
+    USERBOT_TYPING_DELAY_MIN: float = 1.0
+    USERBOT_TYPING_DELAY_MAX: float = 4.0
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".

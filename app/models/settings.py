@@ -43,6 +43,10 @@ class UserSettings(SQLModel, table=True):
     enable_channel_monitoring: bool = Field(default=True)
     # Whether to send a notification with reply suggestions for incoming DMs
     enable_dm_notifications: bool = Field(default=True)
+    # Whether to monitor group/supergroup messages and suggest replies
+    enable_group_monitoring: bool = Field(default=False)
+    # Whether to show approval buttons on DM/group reply suggestions
+    enable_reply_approval: bool = Field(default=True)
     # Free-text description of topics the user finds interesting (fed to LLM filter)
     userbot_channel_interests: Optional[str] = Field(default=None)
 

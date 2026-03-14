@@ -34,6 +34,11 @@ class UserBotSetup(StatesGroup):
     waiting_password = State()  # waiting for 2FA cloud password (if enabled)
 
 
+class UserBotReplyEdit(StatesGroup):
+    """FSM state for editing a userbot reply before sending."""
+    waiting_text = State()      # waiting for the user to type a custom reply
+
+
 class HabitStacking(StatesGroup):
     """FSM for confirming habit stacking suggestions."""
     confirm_stack = State()
