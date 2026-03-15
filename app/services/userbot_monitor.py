@@ -89,12 +89,7 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
         if len(text) < 30:
             return
 
-        # Check interest BEFORE incrementing rate limit counter,
-        # so non-interesting posts don't waste the daily quota.
-        interests = await _get_channel_interests(user_id)
-        if not await _is_content_interesting(text, interests):
-            return
-
+        # Rate limit check BEFORE LLM call
         channel_id = event.chat_id
         today_str = date.today().isoformat()
         rate_key = f"userbot_notif:{user_id}:{channel_id}:{today_str}"
@@ -111,6 +106,24 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
         finally:
             await redis.aclose()
 
+        # Classify with rich user context (core facts + interests + profile)
+        interests = await _get_channel_interests(user_id)
+        user_facts = await _get_user_core_facts(user_id)
+
+        classification = await _classify_post_relevance(
+            text=text,
+            interests=interests,
+            user_facts=user_facts,
+        )
+
+        score = classification["score"]
+        summary = classification["summary"]
+
+        # LOW relevance → skip
+        if score < app_settings.USERBOT_CHANNEL_MEDIUM_THRESHOLD:
+            return
+
+        # Extract channel metadata
         chat = await event.get_chat()
         channel_name = (
             getattr(chat, "title", None)
@@ -119,32 +132,51 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
         )
         channel_username = getattr(chat, "username", None)
 
-        excerpt = text[:600].strip()
-        if len(text) > 600:
-            excerpt += "…"
-
         post_link = ""
         if channel_username and event.message.id:
             post_link = (
-                f"\n🔗 <a href='https://t.me/{channel_username}/{event.message.id}'>"
-                f"Open post</a>"
+                f"https://t.me/{channel_username}/{event.message.id}"
             )
-
-        notification = (
-            f"📰 <b>Interesting from {_esc(channel_name)}:</b>\n"
-            f"━━━━━━━━━━━━\n"
-            f"{_esc(excerpt)}"
-            f"{post_link}"
-        )
 
         tg_id = await _get_tg_chat_id(user_id)
-        if tg_id:
+        if not tg_id:
+            return
+
+        # HIGH relevance → send immediately with detail
+        if score >= app_settings.USERBOT_CHANNEL_HIGH_THRESHOLD:
+            reason = classification.get("reason", "")
+            notification = _format_high_priority_notification(
+                channel_name=channel_name,
+                summary=summary,
+                reason=reason,
+                post_link=post_link,
+            )
             await bot.send_message(
-                tg_id, notification, parse_mode="HTML", disable_web_page_preview=True
+                tg_id, notification, parse_mode="HTML", disable_web_page_preview=True,
+            )
+            # Save to conversation history so LLM knows what user was notified about
+            await _save_notification_to_history(
+                tg_chat_id=tg_id,
+                text=f"[Channel notification from {channel_name}]: {summary}",
             )
             logger.info(
-                "Userbot: sent channel notification to user {} from {}", user_id, channel_name
+                "Userbot: sent HIGH-priority channel notification to user {} from {} (score={})",
+                user_id, channel_name, score,
             )
+        else:
+            # MEDIUM relevance → accumulate in batch
+            await _add_to_channel_batch(
+                user_id=user_id,
+                channel_name=channel_name,
+                summary=summary,
+                post_link=post_link,
+                score=score,
+            )
+            # Auto-flush if batch is full
+            batch_size = await _get_channel_batch_size(user_id)
+            if batch_size >= app_settings.USERBOT_CHANNEL_BATCH_MAX:
+                await flush_channel_batch(user_id, bot)
+
     except Exception as exc:
         logger.error("Userbot channel handler error (user {}): {}", user_id, exc)
 
@@ -708,33 +740,215 @@ async def _update_sender_relationship(
 # LLM helpers
 # ===========================================================================
 
-async def _is_content_interesting(text: str, interests: str) -> bool:
-    """YES/NO LLM classification using the lightweight extractor model."""
+async def _classify_post_relevance(
+    text: str,
+    interests: str,
+    user_facts: list[str],
+) -> dict:
+    """
+    Classify a channel post on a 1-5 relevance scale using rich user context.
+
+    Returns dict with keys:
+      score   – int 1-5 (1=irrelevant, 5=must-see)
+      summary – one-line summary of the post
+      reason  – why this is relevant (only meaningful for score >= 4)
+    """
+    _default = {"score": 1, "summary": "", "reason": ""}
     try:
+        # Build user context block
+        context_parts = [f"User interests: {interests}"]
+        if user_facts:
+            facts_block = "; ".join(user_facts[:15])
+            context_parts.append(f"User profile facts: {facts_block}")
+
+        user_context = "\n".join(context_parts)
+
         response = await async_client.chat.completions.create(
             model=app_settings.EXTRACTOR_MODEL_ID,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a content relevance classifier. Reply ONLY with YES or NO.",
+                    "content": (
+                        "You are a personal content relevance classifier.\n"
+                        "Given a user profile and a channel post, output EXACTLY 3 lines:\n"
+                        "Line 1: relevance score 1-5 (1=irrelevant, 2=marginally relevant, "
+                        "3=somewhat interesting, 4=important, 5=must-see)\n"
+                        "Line 2: one-sentence summary of the post (max 100 chars)\n"
+                        "Line 3: why this matters to THIS user (max 80 chars, "
+                        "or 'N/A' if score < 4)\n"
+                        "No extra text, no labels, no formatting."
+                    ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"User interests: {interests}\n\n"
-                        f"Channel post:\n{text[:1000]}\n\n"
-                        "Is this post relevant and interesting for this user? YES or NO:"
+                        f"<user_context>\n{user_context}\n</user_context>\n\n"
+                        f"<channel_post>\n{text[:1500]}\n</channel_post>"
                     ),
                 },
             ],
-            max_tokens=5,
+            max_tokens=120,
             temperature=0,
         )
-        answer = (response.choices[0].message.content or "").strip().upper()
-        return answer.startswith("YES")
+        raw = (response.choices[0].message.content or "").strip()
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+
+        if not lines:
+            return _default
+
+        # Parse score from first line
+        score_match = re.search(r"\d", lines[0])
+        score = int(score_match.group()) if score_match else 1
+        score = max(1, min(5, score))
+
+        summary = lines[1] if len(lines) > 1 else ""
+        reason = lines[2] if len(lines) > 2 else ""
+        if reason.upper().strip() == "N/A":
+            reason = ""
+
+        return {"score": score, "summary": summary, "reason": reason}
+
     except Exception as exc:
-        logger.warning("Userbot interest check LLM error: {}", exc)
-        return False
+        logger.warning("Userbot post classification LLM error: {}", exc)
+        return _default
+
+
+# ===========================================================================
+# Channel notification formatting & batching
+# ===========================================================================
+
+
+def _format_high_priority_notification(
+    *,
+    channel_name: str,
+    summary: str,
+    reason: str,
+    post_link: str,
+) -> str:
+    """Format a high-priority (score 4-5) channel notification — concise but informative."""
+    parts = [f"🔥 <b>{_esc(channel_name)}</b>"]
+    parts.append(f"{_esc(summary)}")
+    if reason:
+        parts.append(f"<i>→ {_esc(reason)}</i>")
+    if post_link:
+        parts.append(f"🔗 <a href='{post_link}'>Open</a>")
+    return "\n".join(parts)
+
+
+def _format_batch_digest(items: list[dict]) -> str:
+    """Format accumulated medium-priority posts into a single compact digest."""
+    if not items:
+        return ""
+    lines = ["📋 <b>Channel digest:</b>"]
+    for item in items:
+        line = f"• <b>{_esc(item['channel_name'])}</b>: {_esc(item['summary'])}"
+        if item.get("post_link"):
+            line += f" (<a href='{item['post_link']}'>link</a>)"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def _add_to_channel_batch(
+    *,
+    user_id: int,
+    channel_name: str,
+    summary: str,
+    post_link: str,
+    score: int,
+) -> None:
+    """Add a medium-relevance post to the user's batch digest in Redis."""
+    entry = json.dumps(
+        {
+            "channel_name": channel_name,
+            "summary": summary,
+            "post_link": post_link,
+            "score": score,
+            "ts": int(time.time()),
+        },
+        ensure_ascii=False,
+    )
+    redis = await _get_redis()
+    try:
+        list_key = f"ub_channel_batch:{user_id}"
+        await redis.rpush(list_key, entry)
+        # Auto-expire the list after 24 hours as a safety net
+        await redis.expire(list_key, 86_400)
+    finally:
+        await redis.aclose()
+
+
+async def _get_channel_batch_size(user_id: int) -> int:
+    redis = await _get_redis()
+    try:
+        return await redis.llen(f"ub_channel_batch:{user_id}")
+    finally:
+        await redis.aclose()
+
+
+async def flush_channel_batch(user_id: int, bot: "Bot") -> None:
+    """
+    Flush the accumulated medium-priority channel posts as a single digest.
+    Called by the auto-flush threshold in _handle_channel_post and by the
+    periodic scheduler job.
+    """
+    redis = await _get_redis()
+    try:
+        list_key = f"ub_channel_batch:{user_id}"
+        raw_items = await redis.lrange(list_key, 0, -1)
+        if not raw_items:
+            return
+        # Atomically drain the list
+        await redis.delete(list_key)
+    finally:
+        await redis.aclose()
+
+    items = []
+    for raw in raw_items:
+        try:
+            items.append(json.loads(raw))
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    if not items:
+        return
+
+    # Sort by score descending so more relevant items appear first
+    items.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    digest = _format_batch_digest(items)
+    tg_id = await _get_tg_chat_id(user_id)
+    if tg_id and digest:
+        await bot.send_message(
+            tg_id, digest, parse_mode="HTML", disable_web_page_preview=True,
+        )
+        # Save summarized digest to conversation history
+        summaries = "; ".join(
+            f"{it['channel_name']}: {it['summary']}" for it in items
+        )
+        await _save_notification_to_history(
+            tg_chat_id=tg_id,
+            text=f"[Channel digest — {len(items)} posts]: {summaries}",
+        )
+        logger.info(
+            "Userbot: flushed channel digest ({} posts) for user {}",
+            len(items), user_id,
+        )
+
+
+async def _save_notification_to_history(*, tg_chat_id: int, text: str) -> None:
+    """
+    Save a summarized channel notification to conversation history so the LLM
+    knows what the user has been informed about during proactive flows.
+    """
+    try:
+        from .conversation_history_service import ConversationHistoryService
+
+        await ConversationHistoryService.save_history(
+            tg_chat_id,
+            [{"role": "assistant", "content": text}],
+        )
+    except Exception as exc:
+        logger.debug("Failed to save notification to history: {}", exc)
 
 
 async def _generate_reply_suggestions(

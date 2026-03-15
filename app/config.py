@@ -121,6 +121,17 @@ class Settings(BaseSettings):
     USERBOT_THREAD_FETCH_LIMIT: int = 8
     # TTL for sender relationship cache in Redis (seconds); default 30 days
     USERBOT_SENDER_CACHE_TTL: int = 30 * 86_400
+    # --- Channel intelligence ---
+    # Relevance score thresholds (1-5 scale from LLM):
+    #   >= HIGH  → send immediately with detail
+    #   >= MEDIUM and < HIGH → accumulate in batch digest
+    #   < MEDIUM → skip
+    USERBOT_CHANNEL_HIGH_THRESHOLD: int = 4
+    USERBOT_CHANNEL_MEDIUM_THRESHOLD: int = 2
+    # Max posts in the medium-relevance batch before auto-flush
+    USERBOT_CHANNEL_BATCH_MAX: int = 7
+    # Interval (hours) for the periodic batch digest flush job
+    USERBOT_CHANNEL_BATCH_FLUSH_HOURS: int = 4
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".

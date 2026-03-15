@@ -164,6 +164,25 @@ async def habit_reminder_job(habit_id: int):
         await session.close()
 
 
+async def channel_batch_flush_job(user_id: int):
+    """Flush accumulated medium-priority channel posts as a compact digest."""
+    logger.info("Running channel batch flush for user {}", user_id)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            return
+        user = await session.get(User, user_id)
+        if not user:
+            return
+        from ..services.userbot_monitor import flush_channel_batch
+        bot = get_bot_instance()
+        await flush_channel_batch(user_id, bot)
+    except Exception as e:
+        logger.exception("Error in channel_batch_flush_job for user {}: {}", user_id, e)
+    finally:
+        await session.close()
+
+
 async def cleanup_expired_memories_job():
     """Cleanup episodes older than EPISODE_LIFETIME_DAYS and clear stale working memory."""
     logger.info("Running cleanup_expired_memories_job")
