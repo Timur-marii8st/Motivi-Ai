@@ -7,9 +7,9 @@ on application startup from the encrypted sessions in the database.
 
 Design decisions
 ----------------
-* Read-only: event handlers are the only interaction with the Telethon API.
-  No write operations (send_message, mark_as_read, etc.) are ever called
-  from within this service.
+* Human-in-the-loop: event handlers monitor messages read-only.
+  Write operations (send_message, send_chat_action) are ONLY performed
+  after explicit user approval via bot callback buttons.
 * Pending auth dict: during the FSM authentication flow the partially-created
   TelegramClient lives in ``_pending`` (keyed by bot user_id). This avoids
   persisting an unverified session to the DB.

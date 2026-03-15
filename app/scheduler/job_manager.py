@@ -27,7 +27,7 @@ class JobManager:
         tz = ZoneInfo(user.user_timezone)
         
         # Remove all existing jobs for this user first to avoid conflicts
-        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest"]:
+        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest", "channel_batch"]:
             job_id = f"{prefix}_{user.id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
@@ -131,10 +131,35 @@ class JobManager:
                 user.id,
             )
 
+        # Channel batch digest flush (periodic, if channel monitoring is enabled)
+        job_id = f"channel_batch_{user.id}"
+        if settings.enable_channel_monitoring:
+            flush_hours = app_settings.USERBOT_CHANNEL_BATCH_FLUSH_HOURS
+            scheduler.add_job(
+                func="app.scheduler.jobs:channel_batch_flush_job",
+                trigger=CronTrigger(
+                    hour=f"*/{flush_hours}",
+                    minute=0,
+                    timezone=tz,
+                ),
+                id=job_id,
+                args=[user.id],
+                replace_existing=True,
+            )
+            logger.info(
+                "Scheduled channel batch flush for user {} every {}h",
+                user.id, flush_hours,
+            )
+        else:
+            logger.info(
+                "Channel batch flush not scheduled for user {} (channel monitoring disabled)",
+                user.id,
+            )
+
     @staticmethod
     async def remove_user_jobs(user_id: int):
         """Remove all jobs for a user."""
-        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest"]:
+        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest", "channel_batch"]:
             job_id = f"{prefix}_{user_id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)

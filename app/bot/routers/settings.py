@@ -31,6 +31,8 @@ async def settings_cmd(message: Message, session):
         f"<b>User Bot (personal account monitoring):</b>\n"
         f"• Channel monitoring: {'✅ Enabled' if settings.enable_channel_monitoring else '❌ Disabled'}\n"
         f"• DM notifications: {'✅ Enabled' if settings.enable_dm_notifications else '❌ Disabled'}\n"
+        f"• Group monitoring: {'✅ Enabled' if settings.enable_group_monitoring else '❌ Disabled'}\n"
+        f"• Reply approval: {'✅ Enabled' if settings.enable_reply_approval else '❌ Disabled'}\n"
         f"• Interests: <i>{settings.userbot_channel_interests or 'not set — use /userbot_interests'}</i>\n"
         f"• Connect: /connect_userbot  |  Disconnect: /disconnect_userbot\n"
     )
@@ -64,6 +66,14 @@ async def settings_cmd(message: Message, session):
             text=f"{'✅' if settings.enable_dm_notifications else '❌'} DM Notifications",
             callback_data="settings_toggle_dm_notifications"
         )],
+        [InlineKeyboardButton(
+            text=f"{'✅' if settings.enable_group_monitoring else '❌'} Group Monitoring",
+            callback_data="settings_toggle_group_monitoring"
+        )],
+        [InlineKeyboardButton(
+            text=f"{'✅' if settings.enable_reply_approval else '❌'} Reply Approval",
+            callback_data="settings_toggle_reply_approval"
+        )],
     ])
     
     await message.answer(text, reply_markup=keyboard)
@@ -89,6 +99,10 @@ async def toggle_setting(callback: CallbackQuery, session):
         settings.enable_channel_monitoring = not settings.enable_channel_monitoring
     elif setting == "dm_notifications":
         settings.enable_dm_notifications = not settings.enable_dm_notifications
+    elif setting == "group_monitoring":
+        settings.enable_group_monitoring = not settings.enable_group_monitoring
+    elif setting == "reply_approval":
+        settings.enable_reply_approval = not settings.enable_reply_approval
 
     settings.touch()
     session.add(settings)

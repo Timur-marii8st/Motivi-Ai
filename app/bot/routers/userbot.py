@@ -1,41 +1,40 @@
 """
-Userbot router — /connect_userbot, /disconnect_userbot, /userbot_interests.
-
-This router manages the MTProto (Telethon) connection that lets the bot
-monitor the user's personal Telegram account in read-only mode.
+Userbot router — /connect_userbot, /disconnect_userbot, /userbot_interests,
+plus callback handlers for reply approval (human-in-the-loop).
 
 Authentication flow
 -------------------
-1. /connect_userbot
-   - Checks that TELEGRAM_API_ID / TELEGRAM_API_HASH are configured.
-   - If the user already has an active session → shows status.
-   - Otherwise → asks for phone number (FSM: waiting_phone).
+1. /connect_userbot → asks for phone number (FSM: waiting_phone).
+2. Phone received → sends OTP → FSM: waiting_code.
+3. OTP code → sign_in. If 2FA → FSM: waiting_password.
+4. On success: saves StringSession to DB, starts monitoring.
 
-2. Phone received (FSM: waiting_phone)
-   - Creates a Telethon client, calls send_code_request().
-   - Stores the pending client + phone_code_hash in UserBotManager._pending.
-   - Moves to FSM: waiting_code.
-
-3. OTP code received (FSM: waiting_code)
-   - Calls client.sign_in(). If 2FA is required, moves to waiting_password.
-   - On success: saves StringSession to DB (encrypted), starts monitoring.
-
-4. 2FA password received (FSM: waiting_password)
-   - Calls client.sign_in(password=…).
-   - On success: same as step 3.
+Reply approval flow
+-------------------
+When the userbot monitor detects a relevant DM/group message, it sends
+a notification with inline buttons: [✅ #1] [✅ #2] [✅ #3] [✏️ Edit] [🚫 Dismiss].
+Pressing a button triggers a callback that:
+  - "Send #N": fetches the pending reply from Redis, sends it via Telethon
+    with human-like typing simulation and random delay.
+  - "Edit": enters FSM waiting_text state for custom reply.
+  - "Dismiss": deletes the pending reply from Redis and confirms.
 
 Safety
 ------
-* The user is instructed to use /cancel_userbot to abort the flow.
-* Pending clients are cleaned up on cancellation and on error.
-* Session strings are encrypted at rest via EncryptedTextType (Tink AES-GCM).
+* Replies are ONLY sent after explicit user approval (button press).
+* Human-like delays (typing action + random pause) before sending.
+* Rate-limited: max USERBOT_MAX_REPLIES_PER_DAY per user per day.
+* Pending replies expire after USERBOT_REPLY_TIMEOUT seconds.
 """
 from __future__ import annotations
+
+import asyncio
+import random
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from loguru import logger
 from telethon import TelegramClient
 from telethon.errors import (
@@ -47,18 +46,293 @@ from telethon.errors import (
     FloodWaitError,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.messages import SetTypingRequest
+from telethon.tl.types import SendMessageTypingAction
 
 from ...config import settings as app_settings
 from ...services.userbot_manager import UserBotManager
+from ...services.userbot_monitor import (
+    check_reply_rate_limit,
+    delete_pending_reply,
+    get_pending_reply,
+    increment_reply_counter,
+    mark_bot_sent_reply,
+)
 from ...services.profile_services import get_or_create_user
-from ..states import UserBotSetup
+from ..states import UserBotSetup, UserBotReplyEdit
 
 router = Router(name="userbot")
 
 
+# ===========================================================================
+# Reply approval callbacks
+# ===========================================================================
+
+@router.callback_query(F.data.startswith("ub_send:"))
+async def cb_approve_reply(callback: CallbackQuery, session):
+    """User approved sending a suggested reply."""
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("❌ Invalid action")
+        return
+
+    pending_key = parts[1]
+    try:
+        suggestion_idx = int(parts[2])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Invalid action")
+        return
+
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    pending = await get_pending_reply(pending_key)
+
+    if not pending:
+        await callback.answer("⏰ This reply has expired.", show_alert=True)
+        await _mark_message_expired(callback)
+        return
+
+    if pending["user_id"] != user.id:
+        await callback.answer("❌ Not your reply.", show_alert=True)
+        return
+
+    if suggestion_idx < 0 or suggestion_idx >= len(pending["suggestions"]):
+        await callback.answer("❌ Invalid suggestion index.", show_alert=True)
+        return
+
+    # Rate limit check
+    if not await check_reply_rate_limit(user.id):
+        await callback.answer(
+            f"⚠️ Daily reply limit reached ({app_settings.USERBOT_MAX_REPLIES_PER_DAY}/day).",
+            show_alert=True,
+        )
+        return
+
+    reply_text = pending["suggestions"][suggestion_idx]
+    success = await _send_reply_with_human_simulation(
+        user_id=user.id,
+        chat_id=pending["chat_id"],
+        reply_to_msg_id=pending["message_id"],
+        text=reply_text,
+    )
+
+    await delete_pending_reply(pending_key)
+
+    if success:
+        await increment_reply_counter(user.id)
+        await callback.answer("✅ Reply sent!")
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ <b>Sent:</b> " + _esc(reply_text),
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    else:
+        await callback.answer("❌ Failed to send. Session may be expired.", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("ub_edit:"))
+async def cb_edit_reply(callback: CallbackQuery, state: FSMContext, session):
+    """User wants to type a custom reply."""
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        await callback.answer("❌ Invalid action")
+        return
+
+    pending_key = parts[1]
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    pending = await get_pending_reply(pending_key)
+
+    if not pending:
+        await callback.answer("⏰ This reply has expired.", show_alert=True)
+        await _mark_message_expired(callback)
+        return
+
+    if pending["user_id"] != user.id:
+        await callback.answer("❌ Not your reply.", show_alert=True)
+        return
+
+    # Store pending_key in FSM state for the text handler
+    await state.set_state(UserBotReplyEdit.waiting_text)
+    await state.update_data(pending_key=pending_key, notification_msg_id=callback.message.message_id)
+
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        f"✏️ Type your reply to <b>{_esc(pending['sender_name'])}</b>.\n"
+        "Send /cancel_reply to abort.",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("ub_dismiss:"))
+async def cb_dismiss_reply(callback: CallbackQuery, session):
+    """User dismissed the reply suggestion."""
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        await callback.answer("❌ Invalid action")
+        return
+
+    pending_key = parts[1]
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    pending = await get_pending_reply(pending_key)
+
+    if pending and pending["user_id"] != user.id:
+        await callback.answer("❌ Not your reply.", show_alert=True)
+        return
+
+    await delete_pending_reply(pending_key)
+    await callback.answer("🚫 Dismissed")
+    await callback.message.edit_text(
+        callback.message.text + "\n\n🚫 <i>Dismissed</i>",
+        parse_mode="HTML",
+        reply_markup=None,
+    )
+
+
 # ---------------------------------------------------------------------------
+# FSM: custom reply text input
+# ---------------------------------------------------------------------------
+
+@router.message(Command("cancel_reply"))
+async def cmd_cancel_reply(message: Message, state: FSMContext):
+    """Cancel the custom reply editing flow."""
+    data = await state.get_data()
+    pending_key = data.get("pending_key")
+    if pending_key:
+        await delete_pending_reply(pending_key)
+    await state.clear()
+    await message.answer("❌ Reply cancelled.")
+
+
+@router.message(UserBotReplyEdit.waiting_text)
+async def process_custom_reply(message: Message, state: FSMContext, session, bot: Bot):
+    """Handle the user's custom reply text."""
+    custom_text = (message.text or "").strip()
+    if not custom_text:
+        await message.answer("Please type a reply or send /cancel_reply to abort.")
+        return
+
+    data = await state.get_data()
+    pending_key = data.get("pending_key")
+    if not pending_key:
+        await state.clear()
+        await message.answer("⚠️ Session lost. Please try again from the notification.")
+        return
+
+    user = await get_or_create_user(session, message.from_user.id, message.chat.id)
+    pending = await get_pending_reply(pending_key)
+
+    if not pending:
+        await state.clear()
+        await message.answer("⏰ This reply has expired.")
+        return
+
+    if pending["user_id"] != user.id:
+        await state.clear()
+        await message.answer("❌ Not your reply.")
+        return
+
+    # Rate limit
+    if not await check_reply_rate_limit(user.id):
+        await state.clear()
+        await message.answer(
+            f"⚠️ Daily reply limit reached ({app_settings.USERBOT_MAX_REPLIES_PER_DAY}/day)."
+        )
+        return
+
+    success = await _send_reply_with_human_simulation(
+        user_id=user.id,
+        chat_id=pending["chat_id"],
+        reply_to_msg_id=pending["message_id"],
+        text=custom_text,
+    )
+
+    await delete_pending_reply(pending_key)
+    await state.clear()
+
+    if success:
+        await increment_reply_counter(user.id)
+        await message.answer(
+            f"✅ <b>Reply sent to {_esc(pending['sender_name'])}:</b>\n"
+            f"<i>{_esc(custom_text[:200])}</i>",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer("❌ Failed to send. Your Telethon session may have expired.")
+
+
+# ===========================================================================
+# Human-like reply sending
+# ===========================================================================
+
+async def _send_reply_with_human_simulation(
+    *,
+    user_id: int,
+    chat_id: int,
+    reply_to_msg_id: int,
+    text: str,
+) -> bool:
+    """
+    Send a reply via Telethon with human-like typing simulation.
+
+    1. Show "typing..." action in the target chat
+    2. Wait a random delay proportional to text length
+    3. Send the message as a reply to the original
+
+    Returns True on success, False on failure.
+    """
+    client = UserBotManager.get_client(user_id)
+    if not client:
+        logger.warning("No active Telethon client for user {} — cannot send reply", user_id)
+        return False
+
+    try:
+        # 1. Send typing action
+        try:
+            await client(SetTypingRequest(
+                peer=chat_id,
+                action=SendMessageTypingAction(),
+            ))
+        except Exception as exc:
+            logger.debug("Could not send typing action for user {}: {}", user_id, exc)
+
+        # 2. Human-like delay: base + proportional to text length
+        base_delay = random.uniform(
+            app_settings.USERBOT_TYPING_DELAY_MIN,
+            app_settings.USERBOT_TYPING_DELAY_MAX,
+        )
+        # ~50ms per character, capped at 5 extra seconds
+        char_delay = min(len(text) * 0.05, 5.0)
+        total_delay = base_delay + char_delay
+        await asyncio.sleep(total_delay)
+
+        # 3. Mark as bot-sent so the outgoing handler skips it
+        await mark_bot_sent_reply(user_id, chat_id)
+
+        # 4. Send the message as a reply
+        await client.send_message(
+            entity=chat_id,
+            message=text,
+            reply_to=reply_to_msg_id,
+        )
+
+        logger.info(
+            "Userbot: sent approved reply for user {} to chat {} (delay={:.1f}s)",
+            user_id, chat_id, total_delay,
+        )
+        return True
+
+    except Exception as exc:
+        logger.error(
+            "Userbot: failed to send reply for user {} to chat {}: {}",
+            user_id, chat_id, exc,
+        )
+        return False
+
+
+# ===========================================================================
 # /connect_userbot — entry point
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 @router.message(Command("connect_userbot"))
 async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot: Bot):
@@ -73,7 +347,6 @@ async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot:
 
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
-    # Check for an existing active session
     from sqlmodel import select
     from ...models.userbot_session import UserBotSession
 
@@ -96,11 +369,11 @@ async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot:
 
     await message.answer(
         "🔐 <b>Connect your Telegram account</b>\n\n"
-        "I'll monitor your channels and private messages in <b>read-only</b> mode:\n"
+        "I'll monitor your channels, groups, and private messages:\n"
         "• Notify you about interesting channel posts\n"
-        "• Suggest replies for incoming messages\n\n"
-        "Your session is encrypted and stored securely. "
-        "I will <b>never</b> send any message from your account.\n\n"
+        "• Suggest replies for incoming messages\n"
+        "• Send replies <b>only after your approval</b> 👆\n\n"
+        "Your session is encrypted and stored securely.\n\n"
         "Please send your phone number in international format "
         "(e.g. <code>+79001234567</code>).\n\n"
         "Send /cancel_userbot to abort.",
@@ -114,16 +387,16 @@ async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot:
 # ---------------------------------------------------------------------------
 
 @router.message(Command("cancel_userbot"))
-async def cmd_cancel_userbot(message: Message, state: FSMContext):
-    user_id = message.from_user.id
+async def cmd_cancel_userbot(message: Message, state: FSMContext, session):
+    user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
-    pending = UserBotManager.get_pending(user_id)
+    pending = UserBotManager.get_pending(user.id)
     if pending:
         try:
             await pending["client"].disconnect()
         except Exception:
             pass
-        UserBotManager.clear_pending(user_id)
+        UserBotManager.clear_pending(user.id)
 
     await state.clear()
     await message.answer("❌ Userbot setup cancelled.")
@@ -145,7 +418,6 @@ async def process_phone(message: Message, state: FSMContext, session, bot: Bot):
 
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
-    # Clean up any leftover pending client
     old = UserBotManager.get_pending(user.id)
     if old:
         try:
@@ -216,7 +488,6 @@ async def process_code(message: Message, state: FSMContext, session, bot: Bot):
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
     except SessionPasswordNeededError:
-        # 2FA is enabled — ask for the cloud password
         await message.answer(
             "🔒 Two-factor authentication is enabled.\n"
             "Please send your <b>cloud password</b>.\n"
@@ -274,7 +545,6 @@ async def process_password(message: Message, state: FSMContext, session, bot: Bo
         await message.answer("❌ Sign-in failed. Please try again later.")
         return
 
-    # Delete the password message immediately for security
     try:
         await message.delete()
     except Exception:
@@ -303,10 +573,8 @@ async def cmd_disconnect_userbot(message: Message, state: FSMContext, session, b
         await message.answer("You don't have a connected Telegram account.")
         return
 
-    # Stop and remove client
     await UserBotManager.stop_client(user.id)
 
-    # Mark DB record as inactive
     ubot_session.is_active = False
     ubot_session.session_string = None
     ubot_session.touch()
@@ -326,10 +594,6 @@ async def cmd_disconnect_userbot(message: Message, state: FSMContext, session, b
 
 @router.message(Command("userbot_interests"))
 async def cmd_userbot_interests(message: Message, session):
-    """
-    Usage: /userbot_interests technology, AI, startups, finance
-    Sets the text used by the LLM to decide which channel posts to forward.
-    """
     user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
     text = (message.text or "").removeprefix("/userbot_interests").strip()
@@ -345,7 +609,7 @@ async def cmd_userbot_interests(message: Message, session):
     from ...services.settings_service import SettingsService
 
     user_settings = await SettingsService.get_or_create(session, user.id)
-    user_settings.userbot_channel_interests = text[:500]  # cap at 500 chars
+    user_settings.userbot_channel_interests = text[:500]
     user_settings.touch()
     session.add(user_settings)
     await session.commit()
@@ -357,9 +621,9 @@ async def cmd_userbot_interests(message: Message, session):
     )
 
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Internal helpers
+# ===========================================================================
 
 async def _finalize_connection(
     client: TelegramClient,
@@ -369,18 +633,13 @@ async def _finalize_connection(
     session,
     bot: Bot,
 ) -> None:
-    """
-    Save the authenticated session to the DB, start monitoring, and confirm.
-    Called after a successful sign_in (either code or password path).
-    """
+    """Save the authenticated session to the DB, start monitoring, and confirm."""
     from sqlmodel import select
-    from datetime import datetime, timezone
     from ...models.userbot_session import UserBotSession
 
     session_string = client.session.save()
     UserBotManager.clear_pending(user_id)
 
-    # Upsert UserBotSession
     result = await session.execute(
         select(UserBotSession).where(UserBotSession.user_id == user_id)
     )
@@ -398,8 +657,6 @@ async def _finalize_connection(
     session.add(ubot_session)
     await session.commit()
 
-    # Disconnect the temporary auth client and let the manager create a clean
-    # monitoring client from the now-saved session string.
     try:
         await client.disconnect()
     except Exception:
@@ -410,12 +667,30 @@ async def _finalize_connection(
     await state.clear()
     await message.answer(
         "✅ <b>Telegram account connected!</b>\n\n"
-        "I'm now monitoring your account in read-only mode:\n"
-        "• Interesting channel posts → I'll notify you\n"
-        "• Incoming messages → I'll suggest replies\n\n"
-        "Use <code>/userbot_interests topic1, topic2</code> to customise which "
-        "channel posts I forward.\n"
+        "I'm now monitoring your account:\n"
+        "• Interesting channel posts → notifications\n"
+        "• Incoming DMs → reply suggestions with approval buttons\n"
+        "• Group mentions/replies → reply suggestions with approval buttons\n\n"
+        "I will <b>only send replies after your approval</b> 👆\n\n"
+        "Use <code>/userbot_interests topic1, topic2</code> to customise channel filters.\n"
         "Use /disconnect_userbot to stop monitoring at any time.",
         parse_mode="HTML",
     )
     logger.info("User {} successfully connected userbot", user_id)
+
+
+async def _mark_message_expired(callback: CallbackQuery) -> None:
+    """Update the notification message to show it's expired."""
+    try:
+        await callback.message.edit_text(
+            callback.message.text + "\n\n⏰ <i>Expired</i>",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+
+def _esc(text: str) -> str:
+    """Escape HTML special characters for Telegram HTML parse mode."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
