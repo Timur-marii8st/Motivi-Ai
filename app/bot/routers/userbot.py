@@ -75,7 +75,11 @@ async def cb_approve_reply(callback: CallbackQuery, session):
         return
 
     pending_key = parts[1]
-    suggestion_idx = int(parts[2])
+    try:
+        suggestion_idx = int(parts[2])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Invalid action")
+        return
 
     user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
     pending = await get_pending_reply(pending_key)
@@ -89,7 +93,7 @@ async def cb_approve_reply(callback: CallbackQuery, session):
         await callback.answer("❌ Not your reply.", show_alert=True)
         return
 
-    if suggestion_idx >= len(pending["suggestions"]):
+    if suggestion_idx < 0 or suggestion_idx >= len(pending["suggestions"]):
         await callback.answer("❌ Invalid suggestion index.", show_alert=True)
         return
 

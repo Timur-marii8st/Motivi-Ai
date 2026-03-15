@@ -116,7 +116,7 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
             f"{post_link}"
         )
 
-        tg_id = await _get_tg_user_id(user_id)
+        tg_id = await _get_tg_chat_id(user_id)
         if tg_id:
             await bot.send_message(
                 tg_id, notification, parse_mode="HTML", disable_web_page_preview=True
@@ -167,7 +167,7 @@ async def _handle_dm(event, user_id: int, bot: "Bot") -> None:
         # Determine if we show approval buttons
         show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
 
-        tg_id = await _get_tg_user_id(user_id)
+        tg_id = await _get_tg_chat_id(user_id)
         if not tg_id:
             return
 
@@ -284,7 +284,7 @@ async def _handle_group_message(
         for i, s in enumerate(suggestions, 1):
             notification += f"{i}️⃣ {_esc(s)}\n"
 
-        tg_id = await _get_tg_user_id(user_id)
+        tg_id = await _get_tg_chat_id(user_id)
         if not tg_id:
             return
 
@@ -543,17 +543,17 @@ async def _get_channel_interests(user_id: int) -> str:
     return "technology, science, business, current events, health"
 
 
-async def _get_tg_user_id(user_id: int) -> int | None:
-    """Look up the Telegram user_id (tg_user_id) for a bot-user row."""
+async def _get_tg_chat_id(user_id: int) -> int | None:
+    """Look up the Telegram chat_id (tg_chat_id) for sending bot notifications."""
     try:
         from ..db import get_session
         from ..models.users import User
 
         async with get_session() as session:
             user = await session.get(User, user_id)
-            return user.tg_user_id if user else None
+            return user.tg_chat_id if user else None
     except Exception as exc:
-        logger.error("Userbot: could not fetch tg_user_id for user {}: {}", user_id, exc)
+        logger.error("Userbot: could not fetch tg_chat_id for user {}: {}", user_id, exc)
         return None
 
 
