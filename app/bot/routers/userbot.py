@@ -55,6 +55,7 @@ from ...services.userbot_monitor import (
     check_reply_rate_limit,
     delete_pending_reply,
     get_pending_reply,
+    increment_reply_counter,
 )
 from ...services.profile_services import get_or_create_user
 from ..states import UserBotSetup, UserBotReplyEdit
@@ -116,6 +117,7 @@ async def cb_approve_reply(callback: CallbackQuery, session):
     await delete_pending_reply(pending_key)
 
     if success:
+        await increment_reply_counter(user.id)
         await callback.answer("✅ Reply sent!")
         await callback.message.edit_text(
             callback.message.text + "\n\n✅ <b>Sent:</b> " + _esc(reply_text),
@@ -248,6 +250,7 @@ async def process_custom_reply(message: Message, state: FSMContext, session, bot
     await state.clear()
 
     if success:
+        await increment_reply_counter(user.id)
         await message.answer(
             f"✅ <b>Reply sent to {_esc(pending['sender_name'])}:</b>\n"
             f"<i>{_esc(custom_text[:200])}</i>",
@@ -380,16 +383,16 @@ async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot:
 # ---------------------------------------------------------------------------
 
 @router.message(Command("cancel_userbot"))
-async def cmd_cancel_userbot(message: Message, state: FSMContext):
-    user_id = message.from_user.id
+async def cmd_cancel_userbot(message: Message, state: FSMContext, session):
+    user = await get_or_create_user(session, message.from_user.id, message.chat.id)
 
-    pending = UserBotManager.get_pending(user_id)
+    pending = UserBotManager.get_pending(user.id)
     if pending:
         try:
             await pending["client"].disconnect()
         except Exception:
             pass
-        UserBotManager.clear_pending(user_id)
+        UserBotManager.clear_pending(user.id)
 
     await state.clear()
     await message.answer("❌ Userbot setup cancelled.")

@@ -70,6 +70,12 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
         if len(text) < 30:
             return
 
+        # Check interest BEFORE incrementing rate limit counter,
+        # so non-interesting posts don't waste the daily quota.
+        interests = await _get_channel_interests(user_id)
+        if not await _is_content_interesting(text, interests):
+            return
+
         channel_id = event.chat_id
         today_str = date.today().isoformat()
         rate_key = f"userbot_notif:{user_id}:{channel_id}:{today_str}"
@@ -85,10 +91,6 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
                 return
         finally:
             await redis.aclose()
-
-        interests = await _get_channel_interests(user_id)
-        if not await _is_content_interesting(text, interests):
-            return
 
         chat = await event.get_chat()
         channel_name = (
@@ -425,7 +427,21 @@ async def delete_pending_reply(pending_key: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def check_reply_rate_limit(user_id: int) -> bool:
-    """Return True if the user is under their daily reply limit."""
+    """Return True if the user is under their daily reply limit (read-only check)."""
+    today_str = date.today().isoformat()
+    rate_key = f"ub_replies:{user_id}:{today_str}"
+
+    redis = await _get_redis()
+    try:
+        current = await redis.get(rate_key)
+        count = int(current) if current else 0
+        return count < app_settings.USERBOT_MAX_REPLIES_PER_DAY
+    finally:
+        await redis.aclose()
+
+
+async def increment_reply_counter(user_id: int) -> None:
+    """Increment the daily reply counter AFTER a successful send."""
     today_str = date.today().isoformat()
     rate_key = f"ub_replies:{user_id}:{today_str}"
 
@@ -434,11 +450,7 @@ async def check_reply_rate_limit(user_id: int) -> bool:
         async with redis.pipeline(transaction=True) as pipe:
             pipe.incr(rate_key)
             pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
-            pipe_result = await pipe.execute()
-        count = int(pipe_result[0])
-        if count > app_settings.USERBOT_MAX_REPLIES_PER_DAY:
-            return False
-        return True
+            await pipe.execute()
     finally:
         await redis.aclose()
 
