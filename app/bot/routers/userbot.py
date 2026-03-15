@@ -56,6 +56,7 @@ from ...services.userbot_monitor import (
     delete_pending_reply,
     get_pending_reply,
     increment_reply_counter,
+    mark_bot_sent_reply,
 )
 from ...services.profile_services import get_or_create_user
 from ..states import UserBotSetup, UserBotReplyEdit
@@ -305,7 +306,10 @@ async def _send_reply_with_human_simulation(
         total_delay = base_delay + char_delay
         await asyncio.sleep(total_delay)
 
-        # 3. Send the message as a reply
+        # 3. Mark as bot-sent so the outgoing handler skips it
+        await mark_bot_sent_reply(user_id, chat_id)
+
+        # 4. Send the message as a reply
         await client.send_message(
             entity=chat_id,
             message=text,

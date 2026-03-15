@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # Min/max random delay before sending (seconds) — human-like behaviour
     USERBOT_TYPING_DELAY_MIN: float = 1.0
     USERBOT_TYPING_DELAY_MAX: float = 4.0
+    # How many outgoing message samples to keep per user for style learning
+    USERBOT_STYLE_SAMPLES_MAX: int = 30
+    # How many messages to fetch from chat for conversation context
+    USERBOT_THREAD_FETCH_LIMIT: int = 8
+    # TTL for sender relationship cache in Redis (seconds); default 30 days
+    USERBOT_SENDER_CACHE_TTL: int = 30 * 86_400
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".
