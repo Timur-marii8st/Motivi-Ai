@@ -14,7 +14,7 @@ from ...services.memory_orchestrator import MemoryOrchestrator
 from ...services.episodic_memory_service import EpisodicMemoryService
 from ...services.core_memory_service import CoreMemoryService
 from ...services.working_memory_service import WorkingMemoryService
-from ...embeddings.gemini_embedding_client import GeminiEmbeddings
+from ...embeddings.embedding_client import EmbeddingClient
 from ...services.tool_executor import ToolExecutor
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.extractor_service import ExtractorService
@@ -22,7 +22,7 @@ from ...services.extractor_service import ExtractorService
 router = Router(name="multimodal")
 
 # Singletons
-gemini_embeddings = GeminiEmbeddings()
+gemini_embeddings = EmbeddingClient()
 episodic_service = EpisodicMemoryService(gemini_embeddings)
 core_service = CoreMemoryService(gemini_embeddings)
 working_service = WorkingMemoryService(gemini_embeddings)

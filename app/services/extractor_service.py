@@ -9,13 +9,13 @@ from ..models.facts import FactExtraction
 from .episodic_memory_service import EpisodicMemoryService
 from .core_memory_service import CoreMemoryService
 from .working_memory_service import WorkingMemoryService
-from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..embeddings.embedding_client import EmbeddingClient
 from ..llm.client import async_client
 
 GEMMA_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "gemma_system.txt"
 
 # instantiate a shared embeddings client and services that depend on it
-_emb_client = GeminiEmbeddings()
+_emb_client = EmbeddingClient()
 core_memory_service = CoreMemoryService(embeddings=_emb_client)
 episodic_memory_service = EpisodicMemoryService(embeddings=_emb_client)
 working_memory_service = WorkingMemoryService(embeddings=_emb_client)

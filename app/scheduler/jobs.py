@@ -319,7 +319,7 @@ async def archive_raw_conversations_job():
     try:
         from ..services.conversation_history_service import ConversationHistoryService
         from ..services.episodic_memory_service import EpisodicMemoryService
-        from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+        from ..embeddings.embedding_client import EmbeddingClient
 
         redis = ConversationHistoryService._get_redis_client()
         archived_count = 0
@@ -351,7 +351,7 @@ async def archive_raw_conversations_job():
                     f"Daily Chat Archive ({today.isoformat()}):\n\n{conversation_text}\n\n"
                     "[This is an automatic archive of raw conversation history]"
                 )
-                episodic_service = EpisodicMemoryService(GeminiEmbeddings())
+                episodic_service = EpisodicMemoryService(EmbeddingClient())
                 await episodic_service.store_episode(session=session, user_id=user.id, fact_text=archive_text)
                 archived_count += 1
                 logger.info("Archived conversation for user {} (chat_id: {})", user.id, chat_id)

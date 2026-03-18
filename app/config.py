@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # Site Info for OpenRouter Rankings
     
     # Lifetime settings (in days)
-    EPISODE_LIFETIME_DAYS: float = 2.5 * 30.0 / 30.0  # 2.5 months ~ 75 days (keep float for clarity)
+    EPISODE_LIFETIME_DAYS: float = 75.0  # ~2.5 months
     WORKING_MEMORY_LIFETIME_DAYS: int = 5
 
     ENCRYPTION_KEY: str = Field(..., description="Must be 32 url-safe base64-encoded bytes")  # Must be 32 url-safe base64-encoded bytes
@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     
     # Rate limiting
     MAX_MESSAGES_PER_MINUTE: int = 15
+    # TTL for daily Redis counters (24h + 1h buffer to avoid edge-case misses)
+    DAILY_COUNTER_TTL: int = 86400 + 3600
 
     REDIS_URL: str = "redis://redis:6379/0"
     # Fact cleanup

@@ -5,7 +5,15 @@ from datetime import datetime, timezone as _tz
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models.plan import Plan
+
+# Shared plan level → Russian display text mapping
+_PLAN_DURATION_TEXT = {
+    "daily": "на день",
+    "weekly": "на неделю",
+    "monthly": "на месяц",
+}
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -173,10 +181,10 @@ class ToolExecutor:
         
         # Build human-friendly time info
         scheduled_utc_iso = reminder_dt_utc.isoformat()
-        scheduled_local_iso = reminder_dt_local.isoformat() if 'reminder_dt_local' in locals() else scheduled_utc_iso
-        
-        logger.info("Scheduled reminder for user {} at {} UTC ({} local in {})", 
-                   user_id, reminder_dt_utc, reminder_dt_local if 'reminder_dt_local' in locals() else 'N/A', tzname)
+        scheduled_local_iso = reminder_dt_local.isoformat()
+
+        logger.info("Scheduled reminder for user {} at {} UTC ({} local in {})",
+                   user_id, reminder_dt_utc, reminder_dt_local, tzname)
         
         return {
             "success": True,
@@ -293,11 +301,7 @@ class ToolExecutor:
             # Send plan to user via Telegram
             bot = self._require_bot()
 
-            duration_text = {
-                "daily": "на день",
-                "weekly": "на неделю",
-                "monthly": "на месяц",
-            }.get(plan_level, "")
+            duration_text = _PLAN_DURATION_TEXT.get(plan_level, "")
 
             message = f"📋 <b>Твой план {duration_text}:</b>\n\n{plan_content}"
             await bot.send_message(chat_id, message)
@@ -393,11 +397,7 @@ class ToolExecutor:
             # Send updated plan to user via Telegram
             bot = self._require_bot()
 
-            duration_text = {
-                "daily": "на день",
-                "weekly": "на неделю",
-                "monthly": "на месяц",
-            }.get(plan.plan_level, "")
+            duration_text = _PLAN_DURATION_TEXT.get(plan.plan_level, "")
 
             message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{plan_content}"
             await bot.send_message(chat_id, message)
@@ -426,7 +426,6 @@ class ToolExecutor:
         from ..services.subscription_service import SubscriptionService
         from ..services.conversation_history_service import ConversationHistoryService
         from ..models.users import User
-        from ..config import settings
 
         _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
@@ -467,7 +466,7 @@ class ToolExecutor:
             counter_key = f"code_exec:{user_id}:{today_str}"
             async with redis.pipeline(transaction=True) as pipe:
                 pipe.incr(counter_key)
-                pipe.execute_command("EXPIRE", counter_key, 86400 + 3600, "NX")
+                pipe.execute_command("EXPIRE", counter_key, settings.DAILY_COUNTER_TTL, "NX")
                 pipe_result = await pipe.execute()
             current_count = int(pipe_result[0])
             if current_count > limit:

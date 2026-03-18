@@ -47,7 +47,7 @@ class SubscriptionService:
 
         async with redis.pipeline(transaction=True) as pipe:
             pipe.incr(key)
-            pipe.execute_command("EXPIRE", key, 86400 + 3600, "NX")
+            pipe.execute_command("EXPIRE", key, settings.DAILY_COUNTER_TTL, "NX")
             pipe_result = await pipe.execute()
         current_usage = int(pipe_result[0])
 

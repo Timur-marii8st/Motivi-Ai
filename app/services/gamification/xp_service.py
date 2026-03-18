@@ -113,7 +113,7 @@ async def award_xp(
 
     pipe = r.pipeline()
     pipe.incrby(cap_key, actual_award)
-    pipe.expire(cap_key, 86400 + 3600)
+    pipe.expire(cap_key, settings.DAILY_COUNTER_TTL)
     await pipe.execute()
 
     # ── Persist XP ─────────────────────────────────────────────

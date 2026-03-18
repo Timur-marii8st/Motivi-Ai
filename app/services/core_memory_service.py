@@ -6,14 +6,14 @@ from datetime import datetime, timezone
 import json
 from typing import Optional
 from loguru import logger
-from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..embeddings.embedding_client import EmbeddingClient
 from typing import List
 
 class CoreMemoryService:
     """Manage fundamental, unchanging user data: goals, sleep schedule."""
-    def __init__(self, embeddings: GeminiEmbeddings | None = None):
+    def __init__(self, embeddings: EmbeddingClient | None = None):
         # allow injection for tests; create default client when not provided
-        self.embeddings = embeddings or GeminiEmbeddings()
+        self.embeddings = embeddings or EmbeddingClient()
 
     @staticmethod
     async def get_or_create(session: AsyncSession, user_id: int) -> CoreMemory:

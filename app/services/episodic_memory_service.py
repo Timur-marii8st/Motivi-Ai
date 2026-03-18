@@ -7,7 +7,7 @@ from sqlalchemy.sql import func
 from loguru import logger
 
 from ..models.episode import Episode, EpisodeEmbedding
-from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..embeddings.embedding_client import EmbeddingClient
 from ..config import settings
 
 class EpisodicMemoryService:
@@ -15,7 +15,7 @@ class EpisodicMemoryService:
     Archive past events, vectorize them, and retrieve via semantic search.
     """
 
-    def __init__(self, embeddings: GeminiEmbeddings):
+    def __init__(self, embeddings: EmbeddingClient):
         self.embeddings = embeddings
 
     async def store_episode(

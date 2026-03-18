@@ -11,7 +11,7 @@ from ...services.working_memory_service import WorkingMemoryService
 from ...services.memory_orchestrator import MemoryOrchestrator
 from ...llm.conversation_service import ConversationService
 from ...services.extractor_service import ExtractorService
-from ...embeddings.gemini_embedding_client import GeminiEmbeddings
+from ...embeddings.embedding_client import EmbeddingClient
 from ...services.tool_executor import ToolExecutor
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
@@ -42,7 +42,7 @@ def _extract_search_query(text: str) -> str | None:
     return None
 
 extractor_service = ExtractorService()
-gemini_embeddings = GeminiEmbeddings()
+gemini_embeddings = EmbeddingClient()
 episodic_service = EpisodicMemoryService(gemini_embeddings)
 core_service = CoreMemoryService(gemini_embeddings)
 working_service = WorkingMemoryService(gemini_embeddings)

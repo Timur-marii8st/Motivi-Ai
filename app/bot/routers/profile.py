@@ -174,9 +174,9 @@ async def save_goals(message: Message, state: FSMContext, session):
     
     # Store goals in core memory
     from ...services.core_memory_service import CoreMemoryService
-    from ...embeddings.gemini_embedding_client import GeminiEmbeddings
-    
-    embeddings = GeminiEmbeddings()
+    from ...embeddings.embedding_client import EmbeddingClient
+
+    embeddings = EmbeddingClient()
     core_service = CoreMemoryService(embeddings)
     
     fact_text = f"User goals: {goals_text}"

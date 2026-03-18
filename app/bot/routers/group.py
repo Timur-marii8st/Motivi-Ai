@@ -30,7 +30,7 @@ from ...services.working_memory_service import WorkingMemoryService
 from ...services.memory_orchestrator import MemoryOrchestrator
 from ...llm.conversation_service import ConversationService
 from ...services.extractor_service import ExtractorService
-from ...embeddings.gemini_embedding_client import GeminiEmbeddings
+from ...embeddings.embedding_client import EmbeddingClient
 from ...services.tool_executor import ToolExecutor
 from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
@@ -39,7 +39,7 @@ from ...utils.get_user_time import get_time_in_zone
 router = Router(name="group")
 
 # Module-level singletons (same as in chat.py — these are stateless services)
-_gemini_embeddings = GeminiEmbeddings()
+_gemini_embeddings = EmbeddingClient()
 _episodic_service = EpisodicMemoryService(_gemini_embeddings)
 _core_service = CoreMemoryService(_gemini_embeddings)
 _working_service = WorkingMemoryService(_gemini_embeddings)

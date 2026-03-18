@@ -5,20 +5,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from aiogram import Bot
 
+from ..config import settings
 from ..models.users import User
 from ..bot.bot_provider import get_bot_instance
 from ..services.memory_orchestrator import MemoryOrchestrator
 from ..services.episodic_memory_service import EpisodicMemoryService
 from ..services.core_memory_service import CoreMemoryService
 from ..services.working_memory_service import WorkingMemoryService
-from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..embeddings.embedding_client import EmbeddingClient
 from ..llm.conversation_service import ConversationService
 from ..services.tool_executor import ToolExecutor
 from ..services.conversation_history_service import ConversationHistoryService
 from ..services.extractor_service import ExtractorService
 
 # Singleton embeddings shared across all ProactiveFlows instances
-_shared_embeddings = GeminiEmbeddings()
+_shared_embeddings = EmbeddingClient()
 
 
 class ProactiveFlows:

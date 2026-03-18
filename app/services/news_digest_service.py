@@ -123,9 +123,9 @@ class NewsDigestService:
         # 2. Interest keywords from core facts
         try:
             from .core_memory_service import CoreMemoryService
-            from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+            from ..embeddings.embedding_client import EmbeddingClient
 
-            core_service = CoreMemoryService(GeminiEmbeddings())
+            core_service = CoreMemoryService(EmbeddingClient())
             facts = await core_service.list_facts_for_user(session, user.id)
 
             for fact in facts[:30]:

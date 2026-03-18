@@ -100,7 +100,7 @@ class RateLimitMiddleware(BaseMiddleware):
         
         async with self.redis.pipeline(transaction=True) as pipe:
             pipe.incr(quota_key)
-            pipe.execute_command("EXPIRE", quota_key, 86400 + 3600, "NX")
+            pipe.execute_command("EXPIRE", quota_key, settings.DAILY_COUNTER_TTL, "NX")
             pipe_result = await pipe.execute()
         current_usage = int(pipe_result[0])
         

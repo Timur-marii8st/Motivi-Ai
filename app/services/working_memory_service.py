@@ -12,7 +12,7 @@ from ..models.working_memory import (
     WorkingMemoryEntry,
     WorkingEntryEmbedding,
 )
-from ..embeddings.gemini_embedding_client import GeminiEmbeddings
+from ..embeddings.embedding_client import EmbeddingClient
 from typing import List
 from ..config import settings
 
@@ -20,8 +20,8 @@ class WorkingMemoryService:
     """
     Manage short-term goals and summaries; weekly refresh.
     """
-    def __init__(self, embeddings: GeminiEmbeddings | None = None):
-        self.embeddings = embeddings or GeminiEmbeddings()
+    def __init__(self, embeddings: EmbeddingClient | None = None):
+        self.embeddings = embeddings or EmbeddingClient()
 
     @staticmethod
     async def get_or_create(session: AsyncSession, user_id: int) -> WorkingMemory:
