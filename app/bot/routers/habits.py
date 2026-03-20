@@ -48,11 +48,14 @@ async def list_habits_cmd(message: Message, session):
 
     await message.answer("<b>📋 Твои активные привычки:</b>")
 
+    # Batch-load stats for all habits in one query (avoids N+1)
+    stats_map = await HabitService.get_habits_stats_batch(session, habits)
+
     for h in habits:
-        stats = await HabitService.get_habit_stats(session, h.id)
+        stats = stats_map.get(h.id, {})
         card = (
             f"🔹 <b>{html.escape(h.name)}</b>\n"
-            f"   Streak: {stats['current_streak']} 🔥 | Best: {stats['longest_streak']}\n"
+            f"   Streak: {stats.get('current_streak', 0)} 🔥 | Best: {stats.get('longest_streak', 0)}\n"
             f"   Cadence: {h.cadence} | Target: {h.target_count}\n"
             f"   Reminder: {h.reminder_time or 'None'}\n"
         )

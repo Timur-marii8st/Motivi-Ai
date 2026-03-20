@@ -59,11 +59,17 @@ class ProactiveFlows:
         )
         # Build final message: skip leading newlines if greeting is empty
         message_text = f"{greeting}\n\n{response}" if greeting else response
-        # Persist history and send message concurrently
-        await asyncio.gather(
+        # Persist history and send message concurrently.
+        # Use return_exceptions so a Redis failure doesn't prevent message delivery.
+        results = await asyncio.gather(
             ConversationHistoryService.save_history(user.tg_chat_id, updated_history),
             self.bot.send_message(user.tg_chat_id, message_text),
+            return_exceptions=True,
         )
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                task_name = "save_history" if i == 0 else "send_message"
+                logger.error("Proactive flow {} failed for user {}: {}", task_name, user.id, result)
         # Extract and store important info — non-fatal if it fails
         try:
             info_text = f"User message: {prompt}\nAI Assistant message: {response}"

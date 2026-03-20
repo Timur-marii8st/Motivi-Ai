@@ -162,7 +162,8 @@ class ConversationService:
                     
                     # Clean and parse arguments (protect against markdown JSON)
                     try:
-                        clean_args = self._clean_json(tool_call.function.arguments)
+                        raw_args = tool_call.function.arguments or "{}"
+                        clean_args = self._clean_json(raw_args)
                         function_args = json.loads(clean_args)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse tool arguments: {e}. Raw: {tool_call.function.arguments}")

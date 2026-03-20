@@ -36,7 +36,7 @@ class WorkingMemoryService:
                 history_order=1,
                 created_at=now,
                 updated_at=now,
-                decay_date=date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS)),
+                decay_date=now.date() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS)),
             )
             session.add(wm)
             await session.flush()
@@ -61,7 +61,7 @@ class WorkingMemoryService:
         if not wm.decay_date:
             return True
         # if decay_date was set in the past or now, it's stale
-        return date.today() >= wm.decay_date
+        return datetime.now(timezone.utc).date() >= wm.decay_date
 
     async def store_working(
         self,
@@ -86,17 +86,20 @@ class WorkingMemoryService:
             entry.history_order = (entry.history_order or 0) + 1
             session.add(entry)
 
-        # Delete entries beyond the 7th (those with index >=6)
-        # First delete associated embeddings to avoid foreign key constraint violation
-        for old in existing_entries[6:]:
-            # Delete associated embeddings first
+        # Delete entries beyond the 7th (those with index >=6) in batch
+        overflow_entries = existing_entries[6:]
+        if overflow_entries:
+            overflow_ids = [old.id for old in overflow_entries]
             await session.execute(
                 delete(WorkingEntryEmbedding).where(
-                    WorkingEntryEmbedding.working_entry_id == old.id
+                    WorkingEntryEmbedding.working_entry_id.in_(overflow_ids)
                 )
             )
-            # Then delete the entry
-            await session.delete(old)
+            await session.execute(
+                delete(WorkingMemoryEntry).where(
+                    WorkingMemoryEntry.id.in_(overflow_ids)
+                )
+            )
 
         # Create new entry as newest (history_order=1)
         now = datetime.now(timezone.utc)
@@ -130,7 +133,7 @@ class WorkingMemoryService:
         # Update the summary row (single WorkingMemory) so existing callers still get a quick summary
         wm = await WorkingMemoryService.get_or_create(session, user_id)
         wm.working_memory_text = fact_text
-        wm.decay_date = date.today() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
+        wm.decay_date = now.date() + timedelta(days=int(settings.WORKING_MEMORY_LIFETIME_DAYS))
         wm.updated_at = now
         # Only set created_at on first content storage (when working_memory_text was None)
         if not hasattr(wm, '_created_at_set'):
@@ -147,8 +150,10 @@ class WorkingMemoryService:
         user_id: int,
         query_text: str,
         top_k: int = 5,
+        query_vec: Optional[list] = None,
     ) -> List[WorkingMemory]:
-        query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
+        if query_vec is None:
+            query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
         if not query_vec:
             logger.warning("Query embedding failed; returning empty results")
             return []
