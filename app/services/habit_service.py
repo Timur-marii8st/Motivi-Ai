@@ -200,6 +200,42 @@ class HabitService:
         }
 
     @staticmethod
+    async def get_habits_stats_batch(session: AsyncSession, habits: List[Habit]) -> dict[int, dict]:
+        """Get statistics for multiple habits in a single query (avoids N+1)."""
+        if not habits:
+            return {}
+
+        habit_ids = [h.id for h in habits]
+
+        result = await session.execute(
+            select(
+                HabitLog.habit_id,
+                func.count(HabitLog.id),
+                func.sum(HabitLog.count),
+            )
+            .where(HabitLog.habit_id.in_(habit_ids))
+            .group_by(HabitLog.habit_id)
+        )
+
+        log_stats: dict[int, tuple[int, int]] = {}
+        for habit_id, cnt, total in result.all():
+            log_stats[habit_id] = (cnt or 0, total or 0)
+
+        stats_map: dict[int, dict] = {}
+        for h in habits:
+            total_logs, total_count = log_stats.get(h.id, (0, 0))
+            stats_map[h.id] = {
+                "habit_id": h.id,
+                "name": h.name,
+                "current_streak": h.current_streak,
+                "longest_streak": h.longest_streak,
+                "total_logs": total_logs,
+                "total_count": total_count,
+                "last_completed": h.last_completed_date.isoformat() if h.last_completed_date else None,
+            }
+        return stats_map
+
+    @staticmethod
     async def archive_habit(session: AsyncSession, habit_id: int):
         """Archive (deactivate) a habit."""
         habit = await session.get(Habit, habit_id)

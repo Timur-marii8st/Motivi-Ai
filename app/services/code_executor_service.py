@@ -189,7 +189,12 @@ class CodeExecutorService:
                 break
 
             fpath = os.path.join(output_dir, fname)
-            if not os.path.isfile(fpath):
+            # Prevent symlink-based path traversal from inside the container
+            real_path = os.path.realpath(fpath)
+            if not real_path.startswith(os.path.realpath(output_dir) + os.sep):
+                logger.warning("Skipping output file outside output dir (symlink?): {}", fname)
+                continue
+            if os.path.islink(fpath) or not os.path.isfile(fpath):
                 continue
 
             ext = Path(fname).suffix.lower()

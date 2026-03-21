@@ -23,25 +23,6 @@ def _to_list(vec: Any) -> List[float] | None:
     return vec
 
 
-def _cosine_distance(vec_a: Any, vec_b: Any) -> float:
-    a = _to_list(vec_a)
-    b = _to_list(vec_b)
-    if a is None or b is None or len(a) != len(b):
-        return 1.0
-    dot = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
-    for x, y in zip(a, b):
-        fx = float(x)
-        fy = float(y)
-        dot += fx * fy
-        norm_a += fx * fx
-        norm_b += fy * fy
-    if norm_a <= 0.0 or norm_b <= 0.0:
-        return 1.0
-    similarity = dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
-    return 1.0 - similarity
-
 
 class FactCleanupService:
     @staticmethod
@@ -114,34 +95,49 @@ class FactCleanupService:
             res_work = await session.execute(stmt_work)
             to_delete_ids.update(res_work.scalars().all())
 
+        # Self-deduplicate recent episodes using pgvector distance in SQL.
+        # For each recent episode, find if a newer episode exists within the
+        # distance threshold.  This avoids loading all embeddings into Python.
         recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=recent_hours)
-        recent_rows_res = await session.execute(
-            select(Episode.id, Episode.created_at, EpisodeEmbedding.embedding)
-            .join(EpisodeEmbedding, Episode.id == EpisodeEmbedding.episode_id)
-            .where(Episode.user_id == user_id, Episode.created_at >= recent_cutoff)
-        )
-        recent_rows = recent_rows_res.all()
 
-        if recent_rows:
-            all_rows_res = await session.execute(
-                select(Episode.id, Episode.created_at, EpisodeEmbedding.embedding)
-                .join(EpisodeEmbedding, Episode.id == EpisodeEmbedding.episode_id)
-                .where(Episode.user_id == user_id)
+        from sqlalchemy.orm import aliased
+
+        OldEp = aliased(Episode, name="old_ep")
+        OldEmb = aliased(EpisodeEmbedding, name="old_emb")
+        NewEp = aliased(Episode, name="new_ep")
+        NewEmb = aliased(EpisodeEmbedding, name="new_emb")
+
+        # Find recent episodes that have a newer near-duplicate
+        dedup_stmt = (
+            select(OldEp.id)
+            .join(OldEmb, OldEp.id == OldEmb.episode_id)
+            .where(
+                OldEp.user_id == user_id,
+                OldEp.created_at >= recent_cutoff,
             )
-            all_rows = all_rows_res.all()
+            .where(
+                select(NewEp.id)
+                .join(NewEmb, NewEp.id == NewEmb.episode_id)
+                .where(
+                    NewEp.user_id == user_id,
+                    NewEp.id != OldEp.id,
+                    # newer episode (or same time, higher id)
+                    (
+                        (NewEp.created_at > OldEp.created_at)
+                        | (
+                            (NewEp.created_at == OldEp.created_at)
+                            & (NewEp.id > OldEp.id)
+                        )
+                    ),
+                    NewEmb.embedding.cosine_distance(OldEmb.embedding)
+                    <= distance_threshold,
+                )
+                .exists()
+            )
+        )
 
-            for old_id, old_created_at, old_embedding in recent_rows:
-                for new_id, new_created_at, new_embedding in all_rows:
-                    if new_id == old_id:
-                        continue
-                    is_better = new_created_at > old_created_at or (
-                        new_created_at == old_created_at and new_id > old_id
-                    )
-                    if not is_better:
-                        continue
-                    if _cosine_distance(old_embedding, new_embedding) <= distance_threshold:
-                        to_delete_ids.add(old_id)
-                        break
+        dedup_res = await session.execute(dedup_stmt)
+        to_delete_ids.update(dedup_res.scalars().all())
 
         if not to_delete_ids:
             logger.debug("No duplicate episodes found for user {}", user_id)
