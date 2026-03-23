@@ -140,7 +140,7 @@ async def habit_reminder_job(habit_id: int):
         result = await session.execute(
             select(HabitLog).where(
                 HabitLog.habit_id == habit_id,
-                HabitLog.log_date == date.today(),
+                HabitLog.log_date == datetime.now(timezone.utc).date(),
             )
         )
         if result.scalar_one_or_none():

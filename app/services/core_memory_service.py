@@ -93,12 +93,15 @@ class CoreMemoryService:
         user_id: int,
         query_text: str,
         top_k: int = 5,
+        query_vec: Optional[list] = None,
     ) -> List[CoreFact]:
         """Return top-k CoreFact objects semantically similar to query_text.
 
         If user_id is provided, restrict to that user's core memory facts.
+        An optional pre-computed ``query_vec`` avoids a redundant embedding call.
         """
-        query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
+        if query_vec is None:
+            query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
         if not query_vec:
             logger.warning("Query embedding failed; returning empty results")
             return []

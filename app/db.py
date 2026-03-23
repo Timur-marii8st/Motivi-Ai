@@ -15,7 +15,11 @@ engine = create_async_engine(
     echo=False,
     future=True,
     pool_pre_ping=True,
-    connect_args={"command_timeout": 30}
+    pool_size=20,
+    max_overflow=10,
+    pool_recycle=3600,
+    pool_timeout=10,
+    connect_args={"command_timeout": 30},
 )
 
 @event.listens_for(engine.sync_engine, "connect")

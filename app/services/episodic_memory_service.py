@@ -55,12 +55,16 @@ class EpisodicMemoryService:
         query_text: str,
         top_k: int = 5,
         days_back: Optional[int] = None,
+        query_vec: Optional[list] = None,
     ) -> List[Episode]:
         """
         RAG retrieval: find top-k semantically similar episodes.
+
+        An optional pre-computed ``query_vec`` avoids a redundant embedding call.
         """
-        # Embed query
-        query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
+        # Embed query (skip if pre-computed vector supplied)
+        if query_vec is None:
+            query_vec = await self.embeddings.embed(query_text, task_type="retrieval_query")
         if not query_vec:
             logger.warning("Query embedding failed; returning empty results")
             return []

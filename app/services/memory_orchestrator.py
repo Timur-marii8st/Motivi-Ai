@@ -94,15 +94,26 @@ class MemoryOrchestrator:
         Fetch Core, Working, and semantically similar Episodic memories.
         Queries are executed sequentially because a single AsyncSession
         cannot be used concurrently across multiple awaitables.
+
+        The query embedding is computed once and reused across all three
+        similarity searches to avoid redundant API calls.
         """
+        # Embed the query text once and reuse the vector for all retrievals
+        query_vec = await self.core_service.embeddings.embed(
+            query_text, task_type="retrieval_query"
+        )
+
         similar_core_facts = await self.core_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k
+            session, user.id, query_text=query_text, top_k=top_k,
+            query_vec=query_vec,
         )
         working_results = await self.working_service.retrieve_similar(
-            session, user.id, query_text=query_text
+            session, user.id, query_text=query_text,
+            query_vec=query_vec,
         )
         episodes = await self.episodic_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k
+            session, user.id, query_text=query_text, top_k=top_k,
+            query_vec=query_vec,
         )
         working_history_result = await session.execute(
             select(WorkingMemoryEntry)
