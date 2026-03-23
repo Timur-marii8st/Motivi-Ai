@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_SECRET: str
     PUBLIC_BASE_URL: str
 
+    # Optional SOCKS5 proxy for Telegram API (bypasses RKN blocks)
+    # Example: socks5://singbox:1080
+    TELEGRAM_API_PROXY: str = ""
+
     DATABASE_URL: str = Field(..., description="SQLAlchemy async URL, e.g., postgresql+asyncpg://...")
 
     # --- OpenRouter / OpenAI Config ---

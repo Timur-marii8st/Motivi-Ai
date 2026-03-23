@@ -7,6 +7,7 @@
     depends_on:
       - db
       - redis
+      - singbox
     expose:
       - "8000"
     volumes:
@@ -19,6 +20,9 @@
       - /tmp/motivi_exec:/tmp/motivi_exec
     command: >
       bash -lc "poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: unless-stopped
     networks:
       - motivi-network
@@ -44,6 +48,21 @@
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - motivi-network
+
+  # ── sing-box VPN proxy (bypasses Telegram API blocks by RKN) ──
+  singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    command: run -c /etc/sing-box/config.json
+    volumes:
+      - ./singbox/config.json:/etc/sing-box/config.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://cp.cloudflare.com/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
     networks:
       - motivi-network
 

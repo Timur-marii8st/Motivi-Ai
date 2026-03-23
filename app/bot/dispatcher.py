@@ -1,7 +1,9 @@
 from __future__ import annotations
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.redis import RedisStorage
+from loguru import logger
 from redis.asyncio import Redis
 
 from ..config import settings
@@ -28,7 +30,16 @@ from .routers.memories import router as memories_router
 from .routers.persona import persona_router
 
 def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
-    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    session = None
+    if settings.TELEGRAM_API_PROXY:
+        session = AiohttpSession(proxy=settings.TELEGRAM_API_PROXY)
+        logger.info("Telegram API proxy configured: {}", settings.TELEGRAM_API_PROXY)
+
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode="HTML"),
+        session=session,
+    )
 
     redis_client = Redis.from_url(settings.REDIS_URL)
     

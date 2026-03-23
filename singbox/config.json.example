@@ -1,0 +1,45 @@
+{
+  "log": {"level": "info", "timestamp": true},
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "0.0.0.0",
+      "listen_port": 1080,
+      "sniff": true,
+      "sniff_override_destination": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["server1"],
+      "url": "http://cp.cloudflare.com/",
+      "interval": "5m0s"
+    },
+    {
+      "type": "vless",
+      "tag": "server1",
+      "server": "YOUR_SERVER_HOST",
+      "server_port": 443,
+      "uuid": "YOUR_UUID",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "YOUR_SNI",
+        "utls": {"enabled": true, "fingerprint": "firefox"},
+        "reality": {"enabled": true, "public_key": "YOUR_PUBLIC_KEY"}
+      },
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "auto",
+    "auto_detect_interface": true
+  }
+}

@@ -19,3 +19,6 @@ Thumbs.db
 
 # Nginx Proxy Manager data (contains keys, certs, sqlite DB)
 npm_data/
+
+# sing-box VPN config (contains VPN credentials/UUIDs)
+singbox/config.json
