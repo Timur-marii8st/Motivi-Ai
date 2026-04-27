@@ -83,8 +83,8 @@ _LANGUAGE_CONFIG: dict[str, tuple[str, str]] = {
     "sh":         ("alpine:3",              "sh"),
 }
 
-# Languages whose image has /output pre-created (supports file output)
-_FILE_OUTPUT_LANGUAGES: frozenset[str] = frozenset({"python", "python3"})
+# Languages that support writing files to the mounted /output directory.
+_FILE_OUTPUT_LANGUAGES: frozenset[str] = frozenset(_LANGUAGE_CONFIG.keys())
 
 SUPPORTED_LANGUAGES: list[str] = sorted(_LANGUAGE_CONFIG.keys())
 
@@ -103,7 +103,6 @@ class CodeExecutionResult:
     timed_out: bool
     language: str
     # List of (filename, file_bytes) collected from /output/ inside the sandbox.
-    # Populated only for Python executions that write to /output/.
     output_files: list[tuple[str, bytes]] = field(default_factory=list)
 
     @property
@@ -120,34 +119,6 @@ class CodeExecutionResult:
             "success": self.success,
             "output_file_names": [name for name, _ in self.output_files],
         }
-
-    def format_for_chat(self) -> str:
-        """Return a human-readable summary suitable for Telegram HTML."""
-        import html as _html
-        lines: list[str] = []
-
-        if self.timed_out:
-            lines.append(f"<b>⏱ Timeout</b> after {DEFAULT_TIMEOUT_SECONDS}s")
-
-        if self.stdout.strip():
-            lines.append(
-                f"<b>Output:</b>\n<pre><code>{_html.escape(self.stdout[:MAX_OUTPUT_BYTES])}</code></pre>"
-            )
-        if self.stderr.strip():
-            lines.append(
-                f"<b>Stderr:</b>\n<pre><code>{_html.escape(self.stderr[:MAX_OUTPUT_BYTES])}</code></pre>"
-            )
-        if not self.stdout.strip() and not self.stderr.strip() and not self.output_files:
-            lines.append("(no output)")
-
-        if self.output_files:
-            names = ", ".join(name for name, _ in self.output_files)
-            lines.append(f"<b>📎 Files saved:</b> {_html.escape(names)}")
-
-        status_icon = "✅" if self.success else "❌"
-        lines.append(f"{status_icon} Exit code: {self.exit_code}")
-        return "\n".join(lines)
-
 
 class CodeExecutorService:
     """
@@ -277,9 +248,10 @@ class CodeExecutorService:
         """
         Execute the given code string in a sandboxed Docker container.
 
-        For Python, creates a temporary /output directory on the host that is
-        mounted into the container. Any files saved to /output/ inside the
-        container are collected and returned in CodeExecutionResult.output_files.
+        For languages that support file output, creates a temporary /output
+        directory on the host and mounts it into the container. Any files saved
+        to /output/ inside the container are collected and returned in
+        CodeExecutionResult.output_files.
 
         Args:
             language:  One of SUPPORTED_LANGUAGES.
@@ -370,7 +342,7 @@ class CodeExecutorService:
             stdout = stdout_bytes.decode("utf-8", errors="replace")[:MAX_OUTPUT_BYTES]
             stderr = stderr_bytes.decode("utf-8", errors="replace")[:MAX_OUTPUT_BYTES]
 
-            # Collect output files (only for Python sandbox)
+            # Collect output files from the mounted /output directory.
             if output_host_dir:
                 output_files = self._collect_output_files(output_host_dir)
 

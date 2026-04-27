@@ -418,7 +418,7 @@ class ToolExecutor:
     async def _execute_code(self, args: dict, chat_id: int, user_id: int) -> dict:
         """Execute code in a sandboxed Docker container with subscription gate and rate limiting.
 
-        For Python executions, any files saved to /output/ inside the container are
+        For sandboxed executions, any files saved to /output/ inside the container are
         collected and sent directly to the user via Telegram (photos for images, documents
         for everything else). The LLM receives a summary of what was sent.
         """
@@ -429,6 +429,7 @@ class ToolExecutor:
         from ..config import settings
 
         _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+        _TELEGRAM_PHOTO_MAX_BYTES = 9 * 1024 * 1024
 
         language = args.get("language", "").lower().strip()
         code = args.get("code", "").strip()
@@ -500,14 +501,34 @@ class ToolExecutor:
                 ext = Path(fname).suffix.lower()
                 try:
                     input_file = BufferedInputFile(fdata, filename=fname)
-                    if ext in _IMAGE_EXTENSIONS:
+                    if ext in _IMAGE_EXTENSIONS and len(fdata) < _TELEGRAM_PHOTO_MAX_BYTES:
                         await bot.send_photo(chat_id, input_file)
                     else:
                         await bot.send_document(chat_id, input_file)
                     sent_files.append(fname)
                     logger.info("Sent output file {} to chat {}", fname, chat_id)
                 except Exception as e:
-                    logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
+                    if ext in _IMAGE_EXTENSIONS:
+                        try:
+                            fallback_file = BufferedInputFile(fdata, filename=fname)
+                            await bot.send_document(chat_id, fallback_file)
+                            sent_files.append(fname)
+                            logger.info(
+                                "Sent output file {} to chat {} as document after photo send failed",
+                                fname,
+                                chat_id,
+                            )
+                            continue
+                        except Exception as fallback_error:
+                            logger.warning(
+                                "Failed to send output file {} to chat {} as photo and document: {} / {}",
+                                fname,
+                                chat_id,
+                                e,
+                                fallback_error,
+                            )
+                    else:
+                        logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
                     failed_files.append(fname)
 
             result_dict["output_files_sent"] = sent_files
@@ -524,6 +545,7 @@ class ToolExecutor:
         from ..services.search_service import SearchService
         from ..services.subscription_service import SubscriptionService
         from ..models.users import User
+        from ..config import settings
 
         query = (args.get("query") or "").strip()
         if not query:
