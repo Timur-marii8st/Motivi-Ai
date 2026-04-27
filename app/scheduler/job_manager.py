@@ -133,7 +133,7 @@ class JobManager:
 
         # Channel batch digest flush (periodic, if channel monitoring is enabled)
         job_id = f"channel_batch_{user.id}"
-        if settings.enable_channel_monitoring:
+        if getattr(settings, "enable_channel_monitoring", False):
             flush_hours = app_settings.USERBOT_CHANNEL_BATCH_FLUSH_HOURS
             scheduler.add_job(
                 func="app.scheduler.jobs:channel_batch_flush_job",

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .habit import Habit
     from .oauth_token import OAuthToken
     from .plan import Plan
+    from .payment import Payment
 
 
 class User(SQLModel, table=True):
@@ -86,6 +87,7 @@ class User(SQLModel, table=True):
     habits: List["Habit"] = Relationship(back_populates="user")
     oauth_tokens: List["OAuthToken"] = Relationship(back_populates="user")
     plans: List["Plan"] = Relationship(back_populates="user")
+    payments: List["Payment"] = Relationship(back_populates="user")
 
     def touch(self) -> None:
         self.updated_at = datetime.now(timezone.utc)

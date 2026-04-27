@@ -37,7 +37,7 @@ class RateLimitMiddleware(BaseMiddleware):
 
         # Allow successful_payment messages through — they must reach the
         # subscription handler so the user actually receives premium status.
-        if event.successful_payment:
+        if event.successful_payment or event.refunded_payment:
             return await handler(event, data)
 
         tg_user_id = event.from_user.id

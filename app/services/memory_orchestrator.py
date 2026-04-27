@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+import inspect
 import json
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +88,16 @@ class MemoryOrchestrator:
         self.core_service = core_service
         self.working_service = working_service
 
+    @staticmethod
+    async def _call_retrieve_similar(fn, *args, query_text: str, top_k: int = 5, query_vec=None):
+        kwargs = {"query_text": query_text}
+        signature = inspect.signature(fn)
+        if "top_k" in signature.parameters:
+            kwargs["top_k"] = top_k
+        if "query_vec" in signature.parameters:
+            kwargs["query_vec"] = query_vec
+        return await fn(*args, **kwargs)
+
     async def assemble(
         self, session: AsyncSession, user: User, query_text: str, top_k: int = 5
     ) -> MemoryPack:
@@ -103,16 +114,27 @@ class MemoryOrchestrator:
             query_text, task_type="retrieval_query"
         )
 
-        similar_core_facts = await self.core_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k,
+        similar_core_facts = await self._call_retrieve_similar(
+            self.core_service.retrieve_similar,
+            session,
+            user.id,
+            query_text=query_text,
+            top_k=top_k,
             query_vec=query_vec,
         )
-        working_results = await self.working_service.retrieve_similar(
-            session, user.id, query_text=query_text,
+        working_results = await self._call_retrieve_similar(
+            self.working_service.retrieve_similar,
+            session,
+            user.id,
+            query_text=query_text,
             query_vec=query_vec,
         )
-        episodes = await self.episodic_service.retrieve_similar(
-            session, user.id, query_text=query_text, top_k=top_k,
+        episodes = await self._call_retrieve_similar(
+            self.episodic_service.retrieve_similar,
+            session,
+            user.id,
+            query_text=query_text,
+            top_k=top_k,
             query_vec=query_vec,
         )
         working_history_result = await session.execute(
