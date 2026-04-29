@@ -22,7 +22,7 @@ class Payment(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="users.id")
-    user: "User" = Relationship(back_populates="payments")
+    user: User = Relationship(back_populates="payments")
 
     invoice_payload: str = Field(max_length=255, index=True)
     currency: str = Field(max_length=10)
