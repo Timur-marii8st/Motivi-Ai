@@ -17,6 +17,7 @@ from ...services.conversation_history_service import ConversationHistoryService
 from ...services.fact_cleanup_service import FactCleanupService
 from ...services.settings_service import SettingsService
 from ...utils.get_user_time import get_time_in_zone
+from ...scheduler.job_manager import JobManager
 
 
 router = Router(name="chat")
@@ -167,6 +168,11 @@ async def handle_chat(message: Message, session):
                 logger.exception("Failed to clear duplicate facts for user {}: {}", user.id, e)
         except Exception as e:
             logger.exception("Failed to clear duplicate facts for user {}: {}", user.id, e)
+
+        try:
+            JobManager.schedule_planner_refresh(user.id, delay_minutes=15)
+        except Exception as e:
+            logger.warning("Failed to schedule proactive planner refresh for user {}: {}", user.id, e)
     
     finally:
         # Always remove the thinking message, even if an error occurred

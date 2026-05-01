@@ -104,6 +104,8 @@ class AccountService:
             ],
             "settings": {
                 "break_mode_active": settings.break_mode_active if settings else False,
+                "enable_smart_proactivity": settings.enable_smart_proactivity if settings else True,
+                "proactive_max_messages_per_day": settings.proactive_max_messages_per_day if settings else 1,
                 "enable_morning_checkin": settings.enable_morning_checkin if settings else True,
                 "enable_evening_wrapup": settings.enable_evening_wrapup if settings else True,
             } if settings else {},

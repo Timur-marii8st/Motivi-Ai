@@ -32,6 +32,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     
     await init_db()
     start_scheduler()
+    try:
+        from .scheduler.job_manager import JobManager
+        async with get_session() as session:
+            await JobManager.reschedule_all_user_jobs(session)
+    except Exception as exc:
+        logger.exception("Failed to reschedule user jobs on startup: {}", exc)
 
     # ── Register gamification event listeners ──
     from .services.event_bus import event_bus

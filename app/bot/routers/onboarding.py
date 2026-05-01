@@ -237,16 +237,16 @@ async def finalize_onboarding(message: Message, state: FSMContext, session):
     JobManager.schedule_user_jobs(user, user_settings)
 
     summary = (
-        f"Вот что я записала:\n"
+        "Вот что я записала:\n"
         f"- Имя: <b>{data.get('name') or 'Не указано'}</b>\n"
         f"- Часовой пояс: <b>{data.get('timezone') or 'Не указан'}</b>\n"
         f"- Подъем: <b>{data.get('wake_time') or 'Не указан'}</b>\n"
-        f"- Отбой: <b>{data.get('bed_time') or 'Не указан'}</b>\n"
+        f"- Сон: <b>{data.get('bed_time') or 'Не указан'}</b>\n"
         f"- Деятельность: <code>{(occ_struct or {}).get('title', 'Не определено')}</code>\n\n"
-        f"✅ Профиль готов! Я запланировала утренние приветствия во время твоего пробуждения "
-        f"и вечерние итоги за час до сна (если указаны времена).\n\n"
-        f"Также я буду составлять планы на неделю по воскресеньям и на месяц 1-го числа. "
-        f"Ты сможешь настроить это через /settings (скоро)."
+        "✅ Профиль готов. Я не буду слать обязательные утренние и вечерние чек-ины. "
+        "Вместо этого буду иногда сама решать, есть ли смысл написать: например, "
+        "предложить короткую рефлексию по дню, помочь выбрать фокус или вернуться "
+        "к важному незавершенному вопросу. Это можно настроить через /settings."
     )
     await message.answer(summary)
     await state.clear()
@@ -281,9 +281,9 @@ async def _trigger_quick_win(user, session) -> None:
             prompt=(
                 "The user just completed onboarding. Based on what you know about them, "
                 "suggest their top 3 priorities for today. Be concise and actionable. "
-                "This is their very first interaction with you beyond setup — make it count."
+                "This is their first interaction with you beyond setup. Be useful, calm, and specific."
             ),
-            greeting="Now that I know a bit about you, here are your priorities for today 🎯",
+            greeting="Теперь я немного понимаю твой контекст. Вот аккуратный стартовый фокус:",
             top_k=3,
         )
         logger.info("Quick win sent to user {}", user.id)

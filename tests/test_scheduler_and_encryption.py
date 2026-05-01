@@ -2,9 +2,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
-from app.scheduler.scheduler_instance import scheduler, start_scheduler, shutdown_scheduler
+from app.scheduler.scheduler_instance import scheduler
 from app.scheduler.jobs import (
     morning_checkin_job,
     evening_wrapup_job,
@@ -55,24 +54,14 @@ def test_start_scheduler_registers_cleanup_job():
 
     scheduler.remove_job(job_id)
 
-def test_morning_checkin_job_calls_flow_when_not_in_break_mode(monkeypatch):
-    """morning_checkin_job РІС‹Р·С‹РІР°РµС‚ ProactiveFlows.morning_checkin РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё break_mode."""
-    fake_session = AsyncMock()
-    fake_user = MagicMock(id=123)
-    fake_session.get = AsyncMock(return_value=fake_user)
-    fake_session.close = AsyncMock()
-
-    monkeypatch.setattr("app.scheduler.jobs.AsyncSessionLocal", lambda: fake_session)
-    monkeypatch.setattr("app.scheduler.jobs._is_break_mode_active", AsyncMock(return_value=False))
-
-    flows_mock = AsyncMock()
-    monkeypatch.setattr("app.scheduler.jobs.get_bot_instance", lambda: MagicMock())
-    monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session, bot=None: flows_mock)
+def test_morning_checkin_job_delegates_to_smart_planner(monkeypatch):
+    """Deprecated fixed morning job delegates to proactive_planner_job."""
+    planner_mock = AsyncMock()
+    monkeypatch.setattr("app.scheduler.jobs.proactive_planner_job", planner_mock)
 
     asyncio.run(morning_checkin_job(user_id=123))
 
-    flows_mock.morning_checkin.assert_awaited_once_with(fake_user)
-    fake_session.commit.assert_awaited()
+    planner_mock.assert_awaited_once_with(123)
 
 
 def test_evening_weekly_monthly_jobs_skip_on_break_mode(monkeypatch):

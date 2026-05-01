@@ -1,5 +1,7 @@
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, delete
@@ -39,28 +41,89 @@ async def _run_proactive_job(user_id: int, method_name: str) -> None:
 
 
 async def morning_checkin_job(user_id: int):
-    """Morning check-in job."""
-    await _run_proactive_job(user_id, "morning_checkin")
+    """Deprecated fixed morning job. Replaced by smart proactive planning."""
+    await proactive_planner_job(user_id)
 
 
 async def evening_wrapup_job(user_id: int):
-    """Evening wrap-up job."""
-    await _run_proactive_job(user_id, "evening_wrapup")
+    """Deprecated fixed evening job. Replaced by smart proactive planning."""
+    await proactive_planner_job(user_id)
 
 
 async def weekly_plan_job(user_id: int):
-    """Weekly plan generation."""
-    await _run_proactive_job(user_id, "weekly_plan")
+    """Deprecated fixed weekly job. Replaced by smart proactive planning."""
+    await proactive_planner_job(user_id)
 
 
 async def monthly_plan_job(user_id: int):
-    """Monthly plan generation."""
-    await _run_proactive_job(user_id, "monthly_plan")
+    """Deprecated fixed monthly job. Replaced by smart proactive planning."""
+    await proactive_planner_job(user_id)
 
 
 async def news_digest_job(user_id: int):
     """Personalised news digest delivery (fires after wake_time + offset)."""
     await _run_proactive_job(user_id, "news_digest")
+
+
+async def proactive_planner_job(user_id: int):
+    """Ask the LLM planner whether to schedule proactive touches today/tomorrow."""
+    logger.info("Running proactive planner for user {}", user_id)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            logger.info("User {} is in break mode; skipping proactive planner", user_id)
+            return
+        user = await session.get(User, user_id)
+        if not user:
+            logger.warning("User {} not found for proactive planner", user_id)
+            return
+        result = await session.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id)
+        )
+        user_settings = result.scalar_one_or_none()
+        if not user_settings or not getattr(user_settings, "enable_smart_proactivity", True):
+            logger.info("Smart proactivity disabled for user {}", user_id)
+            return
+        from ..services.proactive_planning_service import ProactivePlanningService
+
+        planner = ProactivePlanningService(session)
+        await planner.plan_and_schedule(user, user_settings)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in proactive_planner_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
+
+
+async def proactive_touch_job(user_id: int, touch_type: str, prompt: str, reason: str = ""):
+    """Send one LLM-generated proactive message planned by proactive_planner_job."""
+    logger.info("Running proactive touch for user {} ({})", user_id, touch_type)
+    session = AsyncSessionLocal()
+    try:
+        if await _is_break_mode_active(session, user_id):
+            logger.info("User {} is in break mode; skipping proactive touch", user_id)
+            return
+        user = await session.get(User, user_id)
+        if not user:
+            logger.warning("User {} not found for proactive touch", user_id)
+            return
+        flows = ProactiveFlows(session, bot=get_bot_instance())
+        planning_context = (
+            f"Proactive touch type: {touch_type}\n"
+            f"Internal scheduling reason: {reason}\n\n"
+            f"{prompt}\n\n"
+            "Write a short Telegram message in the user's language. "
+            "Be concrete and useful. Do not mention internal scheduling, jobs, or JSON. "
+            "Do not pretend the user asked right now."
+        )
+        await flows._run_flow(user=user, prompt=planning_context, greeting="", top_k=8)
+        await session.commit()
+    except Exception as e:
+        logger.exception("Error in proactive_touch_job for user {}: {}", user_id, e)
+        await session.rollback()
+    finally:
+        await session.close()
 
 
 async def custom_trigger_job(user_id: int, trigger_id: int):
@@ -213,7 +276,7 @@ async def cleanup_expired_memories_job():
 
         result = await session.execute(
             select(WorkingMemory.id, WorkingMemory.user_id).where(
-                WorkingMemory.decay_date != None,
+                WorkingMemory.decay_date.is_not(None),
                 WorkingMemory.decay_date <= datetime.now(timezone.utc).date()
             )
         )
@@ -279,10 +342,10 @@ async def memory_decay_warning_job():
         today = datetime.now(timezone.utc).date()
         result = await session.execute(
             select(WorkingMemory).where(
-                WorkingMemory.decay_date != None,
+                WorkingMemory.decay_date.is_not(None),
                 WorkingMemory.decay_date <= warning_cutoff,
                 WorkingMemory.decay_date > today,
-                WorkingMemory.working_memory_text != None,
+                WorkingMemory.working_memory_text.is_not(None),
             )
         )
         entries = result.scalars().all()

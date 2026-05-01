@@ -1,7 +1,9 @@
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from loguru import logger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -12,8 +14,19 @@ from ..config import settings as app_settings
 
 class JobManager:
     """
-    Manages per-user scheduled jobs: morning, evening, weekly, monthly.
+    Manages per-user scheduled jobs.
     """
+
+    USER_JOB_PREFIXES = [
+        "morning",
+        "evening",
+        "weekly",
+        "monthly",
+        "news_digest",
+        "channel_batch",
+        "proactive_planner",
+        "proactive_planner_refresh",
+    ]
 
     @staticmethod
     def schedule_user_jobs(user: User, settings: UserSettings):
@@ -26,76 +39,41 @@ class JobManager:
 
         tz = ZoneInfo(user.user_timezone)
         
-        # Remove all existing jobs for this user first to avoid conflicts
-        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest", "channel_batch"]:
+        # Remove existing deterministic jobs for this user before rescheduling.
+        # Legacy morning/evening/weekly/monthly jobs are intentionally removed:
+        # smart proactive planning schedules one-off touches instead.
+        for prefix in JobManager.USER_JOB_PREFIXES:
             job_id = f"{prefix}_{user.id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
                 logger.debug("Removed existing job {} before rescheduling", job_id)
-        
-        # Morning check-in
-        job_id = f"morning_{user.id}"
-        if settings.enable_morning_checkin and user.wake_time:
-            wake = user.wake_time
-            scheduler.add_job(
-                func="app.scheduler.jobs:morning_checkin_job",
-                trigger=CronTrigger(hour=wake.hour, minute=wake.minute, timezone=tz),
-                id=job_id,
-                args=[user.id],
-                replace_existing=True,
-            )
-            logger.info("Scheduled morning check-in for user {} at {}", user.id, wake)
-        else:
-            logger.info("Morning check-in not scheduled for user {} (disabled or wake_time not set)", user.id)
+        for job in scheduler.get_jobs():
+            if job.id.startswith(f"proactive_touch_{user.id}_"):
+                scheduler.remove_job(job.id)
+                logger.debug("Removed existing job {} before rescheduling", job.id)
 
-        # Evening wrap-up (1 hour before bed)
-        job_id = f"evening_{user.id}"
-        if settings.enable_evening_wrapup and user.bed_time:
-            bed = user.bed_time
-            # Calculate 1 hour before bed time, handling midnight rollover
-            if bed.hour == 0:
-                evening_hour = 23
-            else:
-                evening_hour = bed.hour - 1
+        # Daily smart proactive planner. The LLM decides whether anything should
+        # actually be sent today/tomorrow; this cron only gives it a chance to plan.
+        planner_job_id = f"proactive_planner_{user.id}"
+        if getattr(settings, "enable_smart_proactivity", True):
+            planner_time = user.wake_time or getattr(settings, "morning_window_start", None)
+            planner_hour = planner_time.hour if planner_time else 9
+            planner_minute = planner_time.minute if planner_time else 0
             scheduler.add_job(
-                func="app.scheduler.jobs:evening_wrapup_job",
-                trigger=CronTrigger(hour=evening_hour, minute=bed.minute, timezone=tz),
-                id=job_id,
+                func="app.scheduler.jobs:proactive_planner_job",
+                trigger=CronTrigger(hour=planner_hour, minute=planner_minute, timezone=tz),
+                id=planner_job_id,
                 args=[user.id],
                 replace_existing=True,
             )
-            logger.info("Scheduled evening wrap-up for user {} at {}:{:02d} (1 hour before bed at {}:{:02d})", 
-                       user.id, evening_hour, bed.minute, bed.hour, bed.minute)
-        else:
-            logger.info("Evening wrap-up not scheduled for user {} (disabled or bed_time not set)", user.id)
-
-        # Weekly plan (Sundays at 18:00 local time)
-        job_id = f"weekly_{user.id}"
-        if settings.enable_weekly_plan:
-            scheduler.add_job(
-                func="app.scheduler.jobs:weekly_plan_job",
-                trigger=CronTrigger(day_of_week='sun', hour=18, minute=0, timezone=tz),
-                id=job_id,
-                args=[user.id],
-                replace_existing=True,
+            logger.info(
+                "Scheduled smart proactive planner for user {} at {:02d}:{:02d}",
+                user.id,
+                planner_hour,
+                planner_minute,
             )
-            logger.info("Scheduled weekly plan for user {}", user.id)
         else:
-            logger.info("Weekly plan not scheduled for user {} (disabled)", user.id)
-
-        # Monthly plan (1st of month at 18:00 local time)
-        job_id = f"monthly_{user.id}"
-        if settings.enable_monthly_plan:
-            scheduler.add_job(
-                func="app.scheduler.jobs:monthly_plan_job",
-                trigger=CronTrigger(day=1, hour=18, minute=0, timezone=tz),
-                id=job_id,
-                args=[user.id],
-                replace_existing=True,
-            )
-            logger.info("Scheduled monthly plan for user {}", user.id)
-        else:
-            logger.info("Monthly plan not scheduled for user {} (disabled)", user.id)
+            logger.info("Smart proactive planner not scheduled for user {} (disabled)", user.id)
 
         # News digest (wake_time + NEWS_DIGEST_OFFSET_MINUTES, if enabled and wake_time is set)
         job_id = f"news_digest_{user.id}"
@@ -157,13 +135,51 @@ class JobManager:
             )
 
     @staticmethod
-    async def remove_user_jobs(user_id: int):
+    def schedule_planner_refresh(user_id: int, delay_minutes: int = 15) -> None:
+        """Schedule a near-future planner run after meaningful user interaction."""
+        job_id = f"proactive_planner_refresh_{user_id}"
+        run_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+        scheduler.add_job(
+            func="app.scheduler.jobs:proactive_planner_job",
+            trigger=DateTrigger(run_date=run_at, timezone=timezone.utc),
+            id=job_id,
+            args=[user_id],
+            replace_existing=True,
+        )
+        logger.debug("Scheduled proactive planner refresh for user {} at {}", user_id, run_at)
+
+    @staticmethod
+    def remove_user_jobs(user_id: int):
         """Remove all jobs for a user."""
-        for prefix in ["morning", "evening", "weekly", "monthly", "news_digest", "channel_batch"]:
+        for prefix in JobManager.USER_JOB_PREFIXES:
             job_id = f"{prefix}_{user_id}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
                 logger.info("Removed job {}", job_id)
+        for job in scheduler.get_jobs():
+            if job.id.startswith(f"proactive_touch_{user_id}_"):
+                scheduler.remove_job(job.id)
+                logger.info("Removed job {}", job.id)
+
+    @staticmethod
+    async def reschedule_all_user_jobs(session: AsyncSession) -> int:
+        """Rebuild per-user jobs on startup and remove legacy fixed proactive jobs."""
+        from sqlmodel import select
+
+        result = await session.execute(select(User))
+        users = list(result.scalars().all())
+        count = 0
+        for user in users:
+            result = await session.execute(
+                select(UserSettings).where(UserSettings.user_id == user.id)
+            )
+            user_settings = result.scalar_one_or_none()
+            if not user_settings:
+                continue
+            JobManager.schedule_user_jobs(user, user_settings)
+            count += 1
+        logger.info("Rescheduled jobs for {} user(s)", count)
+        return count
 
     @staticmethod
     async def schedule_user_triggers(session: AsyncSession, user: User):

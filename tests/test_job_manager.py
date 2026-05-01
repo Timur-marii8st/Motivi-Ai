@@ -1,5 +1,4 @@
 from datetime import datetime, time, timezone
-from zoneinfo import ZoneInfo
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -7,9 +6,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import utc
 
 from app.scheduler.job_manager import JobManager
-from app.scheduler.scheduler_instance import scheduler as global_scheduler
-from app.models.users import User
-from app.models.settings import UserSettings
 
 
 def test_schedule_user_jobs_registers_cron_jobs(monkeypatch):
@@ -31,42 +27,38 @@ def test_schedule_user_jobs_registers_cron_jobs(monkeypatch):
     class SimpleSettings:
         def __init__(self):
             self.user_id = 999
-            self.enable_morning_checkin = True
-            self.enable_evening_wrapup = True
-            self.enable_weekly_plan = False
-            self.enable_monthly_plan = False
+            self.enable_smart_proactivity = True
             self.enable_news_digest = False
+            self.enable_channel_monitoring = False
 
     user = SimpleUser()
     settings = SimpleSettings()
 
     JobManager.schedule_user_jobs(user, settings)
 
-    morning_job = test_scheduler.get_job('morning_999')
-    assert morning_job is not None
-    assert morning_job.trigger is not None
-    # next fire time for morning should be at user wake time
+    planner_job = test_scheduler.get_job('proactive_planner_999')
+    assert planner_job is not None
+    assert planner_job.trigger is not None
+    # Planner runs at wake time, but the planner LLM decides whether to send anything.
     now = datetime.now(timezone.utc)
-    next_run = morning_job.trigger.get_next_fire_time(previous_fire_time=None, now=now)
+    next_run = planner_job.trigger.get_next_fire_time(previous_fire_time=None, now=now)
     # ensure next_run is not None and has correct hour/minute in user's local timezone
     assert next_run is not None
     assert next_run.hour == 8 and next_run.minute == 30
 
-    evening_job = test_scheduler.get_job('evening_999')
-    assert evening_job is not None
-    next_run_evening = evening_job.trigger.get_next_fire_time(previous_fire_time=None, now=now)
-    assert next_run_evening is not None
-    # evening scheduled 1 hour before 23:00 -> 22:00
-    assert next_run_evening.hour == 22 and next_run_evening.minute == 0
+    assert test_scheduler.get_job('morning_999') is None
+    assert test_scheduler.get_job('evening_999') is None
+    assert test_scheduler.get_job('weekly_999') is None
+    assert test_scheduler.get_job('monthly_999') is None
 
     # cleanup
     if test_scheduler.running:
         test_scheduler.shutdown(wait=False)
 
 
-def test_evening_wrapup_job_calls_flow_when_not_in_break_mode(monkeypatch):
-    """evening_wrapup_job should call ProactiveFlows.evening_wrapup"""
-    from app.scheduler.jobs import evening_wrapup_job
+def test_proactive_touch_job_calls_generic_flow_when_not_in_break_mode(monkeypatch):
+    """proactive_touch_job should call ProactiveFlows._run_flow"""
+    from app.scheduler.jobs import proactive_touch_job
 
     fake_session = AsyncMock()
     fake_user = MagicMock(id=123)
@@ -80,7 +72,7 @@ def test_evening_wrapup_job_calls_flow_when_not_in_break_mode(monkeypatch):
     flows_mock = AsyncMock()
     monkeypatch.setattr("app.scheduler.jobs.ProactiveFlows", lambda session, bot=None: flows_mock)
 
-    asyncio.run(evening_wrapup_job(user_id=123))
+    asyncio.run(proactive_touch_job(user_id=123, touch_type="reflection", prompt="Ask for a short reflection", reason="test"))
 
-    flows_mock.evening_wrapup.assert_awaited_once_with(fake_user)
+    flows_mock._run_flow.assert_awaited_once()
     fake_session.commit.assert_awaited()

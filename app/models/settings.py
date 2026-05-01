@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timezone, time
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column, String
+from sqlalchemy import Boolean, DateTime, Column, Integer, String
 
 from ..security.encrypted_types import EncryptedJSONType
 
@@ -30,11 +30,22 @@ class UserSettings(SQLModel, table=True):
     break_mode_active: bool = Field(default=False)
     break_mode_until: Optional[datetime] = Field(default=None, index=True)
 
-    # Proactivity toggles
-    enable_morning_checkin: bool = Field(default=True)
-    enable_evening_wrapup: bool = Field(default=True)
-    enable_weekly_plan: bool = Field(default=True)
-    enable_monthly_plan: bool = Field(default=True)
+    # Smart proactivity. A daily planner LLM decides whether to schedule one-off
+    # reflection, daily-plan, or follow-up messages for today/tomorrow.
+    enable_smart_proactivity: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="true"),
+    )
+    proactive_max_messages_per_day: int = Field(
+        default=1,
+        sa_column=Column(Integer, nullable=False, server_default="1"),
+    )
+
+    # Deprecated fixed proactive toggles kept for existing databases/exports.
+    enable_morning_checkin: bool = Field(default=False)
+    enable_evening_wrapup: bool = Field(default=False)
+    enable_weekly_plan: bool = Field(default=False)
+    enable_monthly_plan: bool = Field(default=False)
     # News digest: opt-in, fires NEWS_DIGEST_OFFSET_MINUTES after wake_time
     enable_news_digest: bool = Field(default=False)
 
