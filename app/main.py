@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+from contextlib import suppress
 from typing import Any, Dict, AsyncIterator
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
@@ -23,9 +25,23 @@ from .models.episode import Episode
 
 bot, dp = create_bot_and_dispatcher()
 set_bot_instance(bot)
+polling_task: asyncio.Task[None] | None = None
+
+
+async def _process_telegram_update(update: Update) -> None:
+    try:
+        await dp.feed_update(bot, update)
+    except Exception as exc:
+        logger.exception(
+            "Telegram update processing failed for update_id={}: {}",
+            update.update_id,
+            exc,
+        )
 
 
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    global polling_task
+
     # --- startup ---
     logger.remove()
     logger.add(lambda msg: print(msg, end=""), level=settings.LOG_LEVEL)
@@ -55,9 +71,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .services.userbot_manager import UserBotManager
     await UserBotManager.start_all(bot)
 
-    webhook_url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook"
-    await bot.set_webhook(url=webhook_url, secret_token=settings.TELEGRAM_WEBHOOK_SECRET)
-    logger.info(f"Webhook set to {webhook_url}")
+    if settings.TELEGRAM_USE_POLLING:
+        await bot.delete_webhook(drop_pending_updates=False)
+        polling_task = asyncio.create_task(dp.start_polling(bot))
+        logger.info("Telegram polling started")
+    else:
+        webhook_url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook"
+        await bot.set_webhook(url=webhook_url, secret_token=settings.TELEGRAM_WEBHOOK_SECRET)
+        logger.info(f"Webhook set to {webhook_url}")
     logger.info("Motivi_AI started successfully")
 
     # Передаём управление FastAPI (запуск приложения)
@@ -65,6 +86,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # --- shutdown ---
     from .services.userbot_manager import UserBotManager as _UBM
+    if polling_task is not None:
+        polling_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await polling_task
+        polling_task = None
     await _UBM.stop_all()
     shutdown_scheduler()
     try:
@@ -171,5 +197,5 @@ async def telegram_webhook(
 
     data: Dict[str, Any] = await request.json()
     update = Update.model_validate(data)
-    await dp.feed_update(bot, update)
+    asyncio.create_task(_process_telegram_update(update))
     return JSONResponse({"ok": True})

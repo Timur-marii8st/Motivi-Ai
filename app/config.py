@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -22,6 +20,7 @@ class Settings(BaseSettings):
     # Optional SOCKS5 proxy for Telegram API (bypasses RKN blocks)
     # Example: socks5://singbox:1080
     TELEGRAM_API_PROXY: str = ""
+    TELEGRAM_USE_POLLING: bool = False
 
     DATABASE_URL: str = Field(..., description="SQLAlchemy async URL, e.g., postgresql+asyncpg://...")
 
