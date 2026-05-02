@@ -11,12 +11,16 @@ from ...services.settings_service import SettingsService
 router = Router(name="settings")
 
 
+def _setting(settings_obj, name: str, default):
+    return getattr(settings_obj, name, default)
+
+
 def _status(enabled: bool) -> str:
-    return "✅ Enabled" if enabled else "❌ Disabled"
+    return "Enabled" if enabled else "Disabled"
 
 
 def _button_status(enabled: bool) -> str:
-    return "✅" if enabled else "❌"
+    return "On" if enabled else "Off"
 
 
 @router.message(F.text == "/settings")
@@ -26,22 +30,27 @@ async def settings_cmd(message: Message, session):
     user_settings = await SettingsService.get_or_create(session, user.id)
 
     text = (
-        "<b>⚙️ Settings</b>\n\n"
+        "<b>Settings</b>\n\n"
         "<b>Proactivity:</b>\n"
-        f"• Smart proactive messages: {_status(user_settings.enable_smart_proactivity)}\n"
-        f"• Max proactive messages/day: <b>{user_settings.proactive_max_messages_per_day}</b>\n"
-        f"• News digest: {_status(user_settings.enable_news_digest)} "
+        f"- Smart proactive messages: {_status(user_settings.enable_smart_proactivity)}\n"
+        f"- Max proactive messages/day: <b>{user_settings.proactive_max_messages_per_day}</b>\n"
+        f"- News digest: {_status(user_settings.enable_news_digest)} "
         f"(fires {app_settings.NEWS_DIGEST_OFFSET_MINUTES} min after wake time)\n\n"
         "<b>Break Mode:</b>\n"
-        f"• Status: {'🔕 Active' if user_settings.break_mode_active else '🔔 Inactive'}\n"
-        f"• Until: {user_settings.break_mode_until.strftime('%Y-%m-%d %H:%M') if user_settings.break_mode_until else 'N/A'}\n\n"
+        f"- Status: {'Active' if user_settings.break_mode_active else 'Inactive'}\n"
+        f"- Until: {user_settings.break_mode_until.strftime('%Y-%m-%d %H:%M') if user_settings.break_mode_until else 'N/A'}\n\n"
         "<b>User Bot (personal account monitoring):</b>\n"
-        f"• Channel monitoring: {_status(user_settings.enable_channel_monitoring)}\n"
-        f"• DM notifications: {_status(user_settings.enable_dm_notifications)}\n"
-        f"• Group monitoring: {_status(user_settings.enable_group_monitoring)}\n"
-        f"• Reply approval: {_status(user_settings.enable_reply_approval)}\n"
-        f"• Interests: <i>{user_settings.userbot_channel_interests or 'not set — use /userbot_interests'}</i>\n"
-        "• Connect: /connect_userbot  |  Disconnect: /disconnect_userbot\n"
+        f"- Channel monitoring: {_status(user_settings.enable_channel_monitoring)}\n"
+        f"- DM notifications: {_status(user_settings.enable_dm_notifications)}\n"
+        f"- Group monitoring: {_status(user_settings.enable_group_monitoring)}\n"
+        f"- Reply approval: {_status(user_settings.enable_reply_approval)}\n"
+        f"- Follow-up reminders: {_status(_setting(user_settings, 'enable_userbot_followups', True))}\n"
+        f"- Follow-up max/day: <b>{_setting(user_settings, 'userbot_followup_max_per_day', app_settings.USERBOT_MAX_FOLLOWUPS_PER_DAY)}</b>\n"
+        f"- Memory ingest: {_status(_setting(user_settings, 'enable_userbot_memory_ingest', True))}\n"
+        f"- Memory privacy: <b>{_setting(user_settings, 'userbot_memory_privacy_level', 'conservative')}</b>\n"
+        f"- Interests: <i>{user_settings.userbot_channel_interests or 'not set; use /userbot_interests'}</i>\n"
+        "- Pending replies: /userbot_pending\n"
+        "- Connect: /connect_userbot  |  Disconnect: /disconnect_userbot\n"
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -88,6 +97,39 @@ async def settings_cmd(message: Message, session):
                     callback_data="settings_toggle_reply_approval",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{_button_status(_setting(user_settings, 'enable_userbot_followups', True))} "
+                        "Follow-up Reminders"
+                    ),
+                    callback_data="settings_toggle_userbot_followups",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "Follow-ups/day: "
+                        f"{_setting(user_settings, 'userbot_followup_max_per_day', app_settings.USERBOT_MAX_FOLLOWUPS_PER_DAY)}"
+                    ),
+                    callback_data="settings_cycle_userbot_followup_max",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{_button_status(_setting(user_settings, 'enable_userbot_memory_ingest', True))} "
+                        "Memory Ingest"
+                    ),
+                    callback_data="settings_toggle_userbot_memory_ingest",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Privacy: {_setting(user_settings, 'userbot_memory_privacy_level', 'conservative')}",
+                    callback_data="settings_cycle_userbot_memory_privacy",
+                )
+            ],
         ]
     )
 
@@ -113,6 +155,13 @@ async def toggle_setting(callback: CallbackQuery, session):
         user_settings.enable_group_monitoring = not user_settings.enable_group_monitoring
     elif setting == "reply_approval":
         user_settings.enable_reply_approval = not user_settings.enable_reply_approval
+    elif setting == "userbot_followups" and hasattr(user_settings, "enable_userbot_followups"):
+        user_settings.enable_userbot_followups = not user_settings.enable_userbot_followups
+    elif setting == "userbot_memory_ingest" and hasattr(user_settings, "enable_userbot_memory_ingest"):
+        user_settings.enable_userbot_memory_ingest = not user_settings.enable_userbot_memory_ingest
+    else:
+        await callback.answer("Setting is not available yet")
+        return
 
     user_settings.touch()
     session.add(user_settings)
@@ -120,7 +169,7 @@ async def toggle_setting(callback: CallbackQuery, session):
 
     JobManager.schedule_user_jobs(user, user_settings)
 
-    await callback.answer("✅ Setting updated")
+    await callback.answer("Setting updated")
     await settings_cmd(callback.message, session)
 
 
@@ -137,5 +186,47 @@ async def cycle_proactive_max(callback: CallbackQuery, session):
 
     JobManager.schedule_user_jobs(user, user_settings)
 
-    await callback.answer("✅ Setting updated")
+    await callback.answer("Setting updated")
+    await settings_cmd(callback.message, session)
+
+
+@router.callback_query(F.data == "settings_cycle_userbot_memory_privacy")
+async def cycle_userbot_memory_privacy(callback: CallbackQuery, session):
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    user_settings = await SettingsService.get_or_create(session, user.id)
+
+    if not hasattr(user_settings, "userbot_memory_privacy_level"):
+        await callback.answer("Setting is not available yet")
+        return
+
+    levels = ["conservative", "normal"]
+    current = user_settings.userbot_memory_privacy_level or "conservative"
+    next_index = (levels.index(current) + 1) % len(levels) if current in levels else 0
+    user_settings.userbot_memory_privacy_level = levels[next_index]
+    user_settings.touch()
+    session.add(user_settings)
+    await session.commit()
+
+    await callback.answer("Setting updated")
+    await settings_cmd(callback.message, session)
+
+
+@router.callback_query(F.data == "settings_cycle_userbot_followup_max")
+async def cycle_userbot_followup_max(callback: CallbackQuery, session):
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    user_settings = await SettingsService.get_or_create(session, user.id)
+
+    if not hasattr(user_settings, "userbot_followup_max_per_day"):
+        await callback.answer("Setting is not available yet")
+        return
+
+    values = [0, 1, 3, 5]
+    current = user_settings.userbot_followup_max_per_day
+    next_index = (values.index(current) + 1) % len(values) if current in values else 1
+    user_settings.userbot_followup_max_per_day = values[next_index]
+    user_settings.touch()
+    session.add(user_settings)
+    await session.commit()
+
+    await callback.answer("Setting updated")
     await settings_cmd(callback.message, session)

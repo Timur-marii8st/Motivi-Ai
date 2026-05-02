@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -26,6 +27,10 @@ class JobManager:
         "channel_batch",
         "proactive_planner",
         "proactive_planner_refresh",
+    ]
+
+    GLOBAL_JOB_IDS = [
+        "userbot_followup_check",
     ]
 
     @staticmethod
@@ -166,6 +171,8 @@ class JobManager:
         """Rebuild per-user jobs on startup and remove legacy fixed proactive jobs."""
         from sqlmodel import select
 
+        JobManager.schedule_global_jobs()
+
         result = await session.execute(select(User))
         users = list(result.scalars().all())
         count = 0
@@ -180,6 +187,24 @@ class JobManager:
             count += 1
         logger.info("Rescheduled jobs for {} user(s)", count)
         return count
+
+    @staticmethod
+    def schedule_global_jobs() -> None:
+        """Schedule global periodic jobs owned by JobManager."""
+        job_id = "userbot_followup_check"
+        scheduler.add_job(
+            func="app.scheduler.jobs:userbot_followup_check_job",
+            trigger=IntervalTrigger(
+                minutes=app_settings.USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES,
+                timezone=timezone.utc,
+            ),
+            id=job_id,
+            replace_existing=True,
+        )
+        logger.info(
+            "Scheduled userbot follow-up check every {} minute(s)",
+            app_settings.USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES,
+        )
 
     @staticmethod
     async def schedule_user_triggers(session: AsyncSession, user: User):

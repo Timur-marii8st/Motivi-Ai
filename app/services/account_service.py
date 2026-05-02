@@ -14,7 +14,9 @@ from ..models.habit import Habit, HabitLog
 from ..models.oauth_token import OAuthToken
 from ..models.profile_completeness import ProfileCompleteness
 from ..models.plan import Plan
+from ..models.userbot_thread import UserBotThread
 from ..scheduler.job_manager import JobManager
+
 
 class AccountService:
     """
@@ -51,7 +53,7 @@ class AccountService:
         working = user.working_memory
         settings = user.settings
         pc = user.profile_completeness
-        
+
         export = {
             "export_date": datetime.now(timezone.utc).isoformat(),
             "user": {
@@ -66,9 +68,14 @@ class AccountService:
             },
             "core_memory": {
                 "sleep_schedule": core.sleep_schedule_json if core else None,
-                "core_facts": [
-                    {"fact": f.fact_text, "created_at": f.created_at.isoformat()} for f in core.facts
-                ] if core and getattr(core, "facts", None) is not None else [],
+                "core_facts": (
+                    [
+                        {"fact": f.fact_text, "created_at": f.created_at.isoformat()}
+                        for f in core.facts
+                    ]
+                    if core and getattr(core, "facts", None) is not None
+                    else []
+                ),
             },
             "working_memory": {
                 "working_memory_text": working.working_memory_text if working else None,
@@ -102,19 +109,91 @@ class AccountService:
                 }
                 for h in user.habits
             ],
-            "settings": {
-                "break_mode_active": settings.break_mode_active if settings else False,
-                "enable_smart_proactivity": settings.enable_smart_proactivity if settings else True,
-                "proactive_max_messages_per_day": settings.proactive_max_messages_per_day if settings else 1,
-                "enable_morning_checkin": settings.enable_morning_checkin if settings else True,
-                "enable_evening_wrapup": settings.enable_evening_wrapup if settings else True,
-            } if settings else {},
-            "profile_completeness": {
-                "score": pc.score if pc else 0.0,
-                "total_interactions": pc.total_interactions if pc else 0,
-            } if pc else {},
+            "settings": (
+                {
+                    "break_mode_active": (
+                        settings.break_mode_active if settings else False
+                    ),
+                    "enable_smart_proactivity": (
+                        settings.enable_smart_proactivity if settings else True
+                    ),
+                    "proactive_max_messages_per_day": (
+                        settings.proactive_max_messages_per_day if settings else 1
+                    ),
+                    "enable_userbot_followups": (
+                        settings.enable_userbot_followups if settings else True
+                    ),
+                    "enable_userbot_memory_ingest": (
+                        settings.enable_userbot_memory_ingest if settings else True
+                    ),
+                    "userbot_followup_max_per_day": (
+                        settings.userbot_followup_max_per_day if settings else 5
+                    ),
+                    "userbot_memory_privacy_level": (
+                        settings.userbot_memory_privacy_level
+                        if settings
+                        else "conservative"
+                    ),
+                    "enable_morning_checkin": (
+                        settings.enable_morning_checkin if settings else True
+                    ),
+                    "enable_evening_wrapup": (
+                        settings.enable_evening_wrapup if settings else True
+                    ),
+                }
+                if settings
+                else {}
+            ),
+            "profile_completeness": (
+                {
+                    "score": pc.score if pc else 0.0,
+                    "total_interactions": pc.total_interactions if pc else 0,
+                }
+                if pc
+                else {}
+            ),
         }
-        
+        thread_result = await session.execute(
+            select(UserBotThread).where(UserBotThread.user_id == user_id)
+        )
+        export["userbot_threads"] = [
+            {
+                "chat_id": thread.chat_id,
+                "chat_type": thread.chat_type,
+                "sender_tg_id": thread.sender_tg_id,
+                "sender_name": thread.sender_name,
+                "message_id": thread.message_id,
+                "message_summary": thread.message_summary,
+                "suggested_replies": thread.suggested_replies_json,
+                "status": thread.status,
+                "importance": thread.importance,
+                "requires_response": thread.requires_response,
+                "memory_worthy": thread.memory_worthy,
+                "memory_items": thread.memory_items_json,
+                "response_deadline_at": (
+                    thread.response_deadline_at.isoformat()
+                    if thread.response_deadline_at
+                    else None
+                ),
+                "reminded_at": (
+                    thread.reminded_at.isoformat() if thread.reminded_at else None
+                ),
+                "last_incoming_at": (
+                    thread.last_incoming_at.isoformat()
+                    if thread.last_incoming_at
+                    else None
+                ),
+                "last_outgoing_at": (
+                    thread.last_outgoing_at.isoformat()
+                    if thread.last_outgoing_at
+                    else None
+                ),
+                "created_at": thread.created_at.isoformat(),
+                "updated_at": thread.updated_at.isoformat(),
+            }
+            for thread in thread_result.scalars().all()
+        ]
+
         logger.info("Exported data for user {}", user_id)
         return export
 
@@ -124,25 +203,36 @@ class AccountService:
         Permanently delete user and all associated data.
         """
         JobManager.remove_user_jobs(user_id)
-        
-        await session.execute(delete(EpisodeEmbedding).where(
-            EpisodeEmbedding.episode_id.in_(
-                select(Episode.id).where(Episode.user_id == user_id)
+
+        await session.execute(
+            delete(EpisodeEmbedding).where(
+                EpisodeEmbedding.episode_id.in_(
+                    select(Episode.id).where(Episode.user_id == user_id)
+                )
             )
-        ))
+        )
         await session.execute(delete(Episode).where(Episode.user_id == user_id))
-        await session.execute(delete(HabitLog).where(
-            HabitLog.habit_id.in_(
-                select(Habit.id).where(Habit.user_id == user_id)
+        await session.execute(
+            delete(HabitLog).where(
+                HabitLog.habit_id.in_(select(Habit.id).where(Habit.user_id == user_id))
             )
-        ))
+        )
         await session.execute(delete(Habit).where(Habit.user_id == user_id))
         await session.execute(delete(OAuthToken).where(OAuthToken.user_id == user_id))
-        await session.execute(delete(UserSettings).where(UserSettings.user_id == user_id))
+        await session.execute(
+            delete(UserBotThread).where(UserBotThread.user_id == user_id)
+        )
+        await session.execute(
+            delete(UserSettings).where(UserSettings.user_id == user_id)
+        )
         await session.execute(delete(Plan).where(Plan.user_id == user_id))
-        await session.execute(delete(WorkingMemory).where(WorkingMemory.user_id == user_id))
+        await session.execute(
+            delete(WorkingMemory).where(WorkingMemory.user_id == user_id)
+        )
         await session.execute(delete(CoreMemory).where(CoreMemory.user_id == user_id))
-        await session.execute(delete(ProfileCompleteness).where(ProfileCompleteness.user_id == user_id))
+        await session.execute(
+            delete(ProfileCompleteness).where(ProfileCompleteness.user_id == user_id)
+        )
         await session.execute(delete(User).where(User.id == user_id))
-        
+
         logger.warning("Deleted all data for user {}", user_id)

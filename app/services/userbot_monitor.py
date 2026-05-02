@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
     """Register all Telethon event handlers for *one* user's client."""
 
-    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_channel))
+    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_channel and not e.is_group))
     async def on_channel_post(event):
         await _handle_channel_post(event, user_id, bot)
 
@@ -83,6 +83,10 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
     try:
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_channel_monitoring:
+            return
+
+        chat = await event.get_chat()
+        if getattr(chat, "megagroup", False):
             return
 
         text: str = event.message.message or ""
@@ -124,7 +128,6 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
             return
 
         # Extract channel metadata
-        chat = await event.get_chat()
         channel_name = (
             getattr(chat, "title", None)
             or getattr(chat, "username", None)
@@ -216,6 +219,13 @@ async def _handle_outgoing_message(event, user_id: int) -> None:
         finally:
             await redis.aclose()
 
+        await _mark_latest_thread_replied(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=event.message.id,
+            reply_text=text,
+        )
+
     except Exception as exc:
         logger.debug("Userbot outgoing handler error (user {}): {}", user_id, exc)
 
@@ -275,6 +285,27 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
             sender_relationship=relationship,
         )
 
+        classification = await _classify_incoming_message(
+            user_id=user_id,
+            text=text,
+            sender_name=sender_name,
+            chat_type="dm",
+            conversation_thread=thread,
+        )
+        summary = classification.get("summary") or _short_summary(text)
+        thread_id = await _persist_incoming_thread(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=event.message.id,
+            sender_name=sender_name,
+            sender_tg_id=sender_tg_id,
+            chat_type="dm",
+            message_text=text,
+            summary=summary,
+            classification=classification,
+            suggestions=suggestions,
+        )
+
         preview = text[:400].strip()
         if len(text) > 400:
             preview += "…"
@@ -306,6 +337,7 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
                 sender_tg_id=sender_tg_id,
                 chat_type="dm",
                 suggestions=suggestions,
+                thread_id=thread_id,
             )
 
             keyboard = _build_approval_keyboard(pending_key, len(suggestions))
@@ -422,6 +454,27 @@ async def _handle_group_message(
             sender_relationship=relationship,
         )
 
+        classification = await _classify_incoming_message(
+            user_id=user_id,
+            text=text,
+            sender_name=sender_name,
+            chat_type="group",
+            conversation_thread=thread,
+        )
+        summary = classification.get("summary") or _short_summary(text)
+        thread_id = await _persist_incoming_thread(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=event.message.id,
+            sender_name=sender_name,
+            sender_tg_id=sender_tg_id,
+            chat_type="group",
+            message_text=text,
+            summary=summary,
+            classification=classification,
+            suggestions=suggestions,
+        )
+
         preview = text[:400].strip()
         if len(text) > 400:
             preview += "…"
@@ -452,6 +505,7 @@ async def _handle_group_message(
                 sender_tg_id=sender_tg_id,
                 chat_type="group",
                 suggestions=suggestions,
+                thread_id=thread_id,
             )
             keyboard = _build_approval_keyboard(pending_key, len(suggestions))
             await bot.send_message(
@@ -515,6 +569,7 @@ async def _store_pending_reply(
     sender_tg_id: int,
     chat_type: str,
     suggestions: list[str],
+    thread_id: int | None = None,
 ) -> str:
     """
     Store a pending reply in Redis and return a unique key.
@@ -533,6 +588,7 @@ async def _store_pending_reply(
         "sender_tg_id": sender_tg_id,
         "chat_type": chat_type,
         "suggestions": suggestions,
+        "thread_id": thread_id,
     }
 
     redis = await _get_redis()
@@ -618,6 +674,136 @@ async def mark_bot_sent_reply(user_id: int, chat_id: int) -> None:
         await redis.setex(f"ub_skip_outgoing:{user_id}:{chat_id}", 15, "1")
     finally:
         await redis.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Persistent thread tracking integration
+# ---------------------------------------------------------------------------
+
+async def _classify_incoming_message(
+    *,
+    user_id: int,
+    text: str,
+    sender_name: str,
+    chat_type: str,
+    conversation_thread: list[dict],
+) -> dict:
+    """Return summary/importance metadata for durable userbot thread storage."""
+    try:
+        from .userbot_thread_service import UserBotThreadService
+
+        service = UserBotThreadService()
+        result = await service.classify_message(
+            chat_type=chat_type,
+            sender_name=sender_name,
+            message_text=text,
+            conversation_summary=_thread_summary(conversation_thread),
+        )
+        if isinstance(result, dict):
+            result.setdefault("message_summary", _short_summary(text))
+            result["summary"] = result.get("message_summary") or _short_summary(text)
+            return result
+    except Exception as exc:
+        logger.debug("Userbot thread classifier failed for user {}: {}", user_id, exc)
+
+    return {
+        "summary": _short_summary(text),
+        "importance": 3,
+        "requires_response": True,
+        "suggested_followup_at": None,
+        "memory_worthy": False,
+        "memory_items": [],
+        "chat_type": chat_type,
+    }
+
+
+async def _persist_incoming_thread(
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: int,
+    sender_name: str,
+    sender_tg_id: int,
+    chat_type: str,
+    message_text: str,
+    summary: str,
+    classification: dict,
+    suggestions: list[str],
+) -> int | None:
+    """Persist an incoming DM/group prompt through Worker B's thread service."""
+    try:
+        from ..db import get_session
+        from .userbot_thread_service import UserBotThreadService
+
+        async with get_session() as session:
+            service = UserBotThreadService()
+            thread = await service.create_or_update_incoming(
+                session=session,
+                user_id=user_id,
+                chat_id=chat_id,
+                chat_type=chat_type,
+                sender_tg_id=sender_tg_id,
+                sender_name=sender_name,
+                message_id=message_id,
+                message_text=message_text,
+                suggested_replies=suggestions,
+                classification={
+                    **classification,
+                    "message_summary": classification.get("message_summary")
+                    or classification.get("summary")
+                    or summary,
+                },
+            )
+            return getattr(thread, "id", None)
+    except TypeError as exc:
+        logger.debug("Userbot thread service signature mismatch: {}", exc)
+    except Exception as exc:
+        logger.debug("Userbot thread persistence failed for user {}: {}", user_id, exc)
+    return None
+
+
+async def _mark_latest_thread_replied(
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: int,
+    reply_text: str,
+) -> None:
+    """Mark the latest open thread in this chat as replied after a real outgoing message."""
+    try:
+        from ..db import get_session
+        from .userbot_thread_service import UserBotThreadService
+
+        async with get_session() as session:
+            service = UserBotThreadService()
+            await service.mark_replied_by_outgoing(
+                session,
+                user_id=user_id,
+                chat_id=chat_id,
+            )
+    except TypeError as exc:
+        logger.debug("Userbot replied marker signature mismatch: {}", exc)
+    except Exception as exc:
+        logger.debug("Userbot replied marker failed for user {}: {}", user_id, exc)
+
+
+def _short_summary(text: str, limit: int = 160) -> str:
+    """Short, display-safe fallback summary; raw message text stays encrypted in DB."""
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
+
+
+# ===========================================================================
+def _thread_summary(conversation_thread: list[dict], limit: int = 800) -> str:
+    lines = []
+    for msg in conversation_thread[-6:]:
+        name = "ME" if msg.get("is_me") else msg.get("name", "?")
+        text = _short_summary(str(msg.get("text", "")), 120)
+        if text:
+            lines.append(f"{name}: {text}")
+    return "\n".join(lines)[-limit:] if lines else ""
 
 
 # ===========================================================================
@@ -791,7 +977,7 @@ async def _classify_post_relevance(
             temperature=0,
         )
         raw = (response.choices[0].message.content or "").strip()
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
 
         if not lines:
             return _default

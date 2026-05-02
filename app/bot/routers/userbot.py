@@ -34,7 +34,7 @@ import random
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 from telethon import TelegramClient
 from telethon.errors import (
@@ -119,6 +119,11 @@ async def cb_approve_reply(callback: CallbackQuery, session):
 
     if success:
         await increment_reply_counter(user.id)
+        await _mark_thread_replied_from_pending(
+            user_id=user.id,
+            pending=pending,
+            reply_text=reply_text,
+        )
         await callback.answer("✅ Reply sent!")
         await callback.message.edit_text(
             callback.message.text + "\n\n✅ <b>Sent:</b> " + _esc(reply_text),
@@ -181,6 +186,7 @@ async def cb_dismiss_reply(callback: CallbackQuery, session):
         return
 
     await delete_pending_reply(pending_key)
+    await _mark_thread_dismissed_from_pending(user_id=user.id, pending=pending)
     await callback.answer("🚫 Dismissed")
     await callback.message.edit_text(
         callback.message.text + "\n\n🚫 <i>Dismissed</i>",
@@ -199,7 +205,13 @@ async def cmd_cancel_reply(message: Message, state: FSMContext):
     data = await state.get_data()
     pending_key = data.get("pending_key")
     if pending_key:
+        pending = await get_pending_reply(pending_key)
         await delete_pending_reply(pending_key)
+        if pending:
+            await _mark_thread_dismissed_from_pending(
+                user_id=pending["user_id"],
+                pending=pending,
+            )
     await state.clear()
     await message.answer("❌ Reply cancelled.")
 
@@ -252,6 +264,11 @@ async def process_custom_reply(message: Message, state: FSMContext, session, bot
 
     if success:
         await increment_reply_counter(user.id)
+        await _mark_thread_replied_from_pending(
+            user_id=user.id,
+            pending=pending,
+            reply_text=custom_text,
+        )
         await message.answer(
             f"✅ <b>Reply sent to {_esc(pending['sender_name'])}:</b>\n"
             f"<i>{_esc(custom_text[:200])}</i>",
@@ -621,9 +638,163 @@ async def cmd_userbot_interests(message: Message, session):
     )
 
 
+# ---------------------------------------------------------------------------
+# /userbot_pending — durable open reply queue
+# ---------------------------------------------------------------------------
+
+@router.message(Command("userbot_pending"))
+async def cmd_userbot_pending(message: Message, session):
+    user = await get_or_create_user(session, message.from_user.id, message.chat.id)
+
+    threads = await _load_open_important_threads(session=session, user_id=user.id)
+    if not threads:
+        await message.answer("No important userbot replies are pending.")
+        return
+
+    lines = ["<b>Pending userbot replies</b>"]
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    for idx, thread in enumerate(threads, 1):
+        thread_id = getattr(thread, "id", None)
+        sender = getattr(thread, "sender_name", None) or "Unknown sender"
+        chat_type = getattr(thread, "chat_type", None) or "chat"
+        summary = (
+            getattr(thread, "message_summary", None)
+            or getattr(thread, "summary", None)
+            or "No summary available"
+        )
+        summary = _compact(summary, 180)
+        lines.append(
+            f"\n<b>{idx}. {_esc(sender)}</b> <i>({_esc(chat_type)})</i>\n"
+            f"{_esc(summary)}"
+        )
+        if thread_id is not None:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"Dismiss #{idx}",
+                    callback_data=f"ub_thread_dismiss:{thread_id}",
+                )
+            ])
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None,
+    )
+
+
+@router.callback_query(F.data.startswith("ub_thread_dismiss:"))
+async def cb_dismiss_persistent_thread(callback: CallbackQuery, session):
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        await callback.answer("Invalid action")
+        return
+
+    try:
+        thread_id = int(parts[1])
+    except ValueError:
+        await callback.answer("Invalid action")
+        return
+
+    user = await get_or_create_user(session, callback.from_user.id, callback.message.chat.id)
+    await _mark_thread_dismissed(user_id=user.id, thread_id=thread_id)
+    await callback.answer("Dismissed")
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+
 # ===========================================================================
 # Internal helpers
 # ===========================================================================
+
+async def _mark_thread_replied_from_pending(
+    *,
+    user_id: int,
+    pending: dict,
+    reply_text: str,
+) -> None:
+    thread_id = pending.get("thread_id")
+    if not thread_id:
+        return
+
+    try:
+        from ...db import get_session
+        from ...services.userbot_thread_service import UserBotThreadService
+
+        async with get_session() as db_session:
+            service = UserBotThreadService()
+            await service.mark_replied(
+                session=db_session,
+                user_id=user_id,
+                thread_id=thread_id,
+            )
+    except Exception as exc:
+        logger.debug("Userbot: failed to mark thread {} replied: {}", thread_id, exc)
+
+
+async def _mark_thread_dismissed_from_pending(*, user_id: int, pending: dict | None) -> None:
+    if not pending:
+        return
+    thread_id = pending.get("thread_id")
+    if thread_id:
+        await _mark_thread_dismissed(user_id=user_id, thread_id=thread_id)
+
+
+async def _mark_thread_dismissed(*, user_id: int, thread_id: int) -> None:
+    try:
+        from ...db import get_session
+        from ...models.userbot_thread import UserBotThread
+        from ...services.userbot_thread_service import UserBotThreadService
+
+        async with get_session() as db_session:
+            thread = await db_session.get(UserBotThread, thread_id)
+            if not thread or getattr(thread, "user_id", None) != user_id:
+                return
+            service = UserBotThreadService()
+            await service.mark_dismissed(
+                db_session,
+                thread_id=thread_id,
+            )
+    except Exception as exc:
+        logger.debug("Userbot: failed to dismiss thread {}: {}", thread_id, exc)
+
+
+async def _load_open_important_threads(*, session, user_id: int) -> list:
+    try:
+        from sqlmodel import select
+        from ...models.userbot_thread import UserBotThread
+
+        stmt = select(UserBotThread).where(UserBotThread.user_id == user_id)
+        if hasattr(UserBotThread, "status"):
+            stmt = stmt.where(UserBotThread.status.in_(["open", "reminded", "pending"]))
+        if hasattr(UserBotThread, "requires_response"):
+            stmt = stmt.where(UserBotThread.requires_response == True)  # noqa: E712
+        elif hasattr(UserBotThread, "needs_reply"):
+            stmt = stmt.where(UserBotThread.needs_reply == True)  # noqa: E712
+        if hasattr(UserBotThread, "importance"):
+            stmt = stmt.where(UserBotThread.importance >= 3)
+        order_by = []
+        if hasattr(UserBotThread, "importance"):
+            order_by.append(UserBotThread.importance.desc())
+        if hasattr(UserBotThread, "updated_at"):
+            order_by.append(UserBotThread.updated_at.desc())
+        elif hasattr(UserBotThread, "created_at"):
+            order_by.append(UserBotThread.created_at.desc())
+        if order_by:
+            stmt = stmt.order_by(*order_by)
+        stmt = stmt.limit(10)
+
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+    except Exception as exc:
+        logger.debug("Userbot: could not load pending threads for user {}: {}", user_id, exc)
+        return []
+
+
+def _compact(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 async def _finalize_connection(
     client: TelegramClient,

@@ -9,10 +9,12 @@ from ..security.encrypted_types import EncryptedJSONType
 if TYPE_CHECKING:
     from .users import User
 
+
 class UserSettings(SQLModel, table=True):
     """
     User preferences for notifications, proactivity, and break mode.
     """
+
     __tablename__ = "user_settings"
     __table_args__ = (UniqueConstraint("user_id", name="uq_user_settings_user"),)
 
@@ -22,9 +24,9 @@ class UserSettings(SQLModel, table=True):
 
     # Notification windows (can override user wake/bed times for messaging)
     morning_window_start: Optional[time] = None  # If None, use user.wake_time
-    morning_window_end: Optional[time] = None    # E.g., wake + 2 hours
+    morning_window_end: Optional[time] = None  # E.g., wake + 2 hours
     evening_window_start: Optional[time] = None  # E.g., bed - 2 hours
-    evening_window_end: Optional[time] = None    # If None, use user.bed_time
+    evening_window_end: Optional[time] = None  # If None, use user.bed_time
 
     # Break mode
     break_mode_active: bool = Field(default=False)
@@ -58,6 +60,22 @@ class UserSettings(SQLModel, table=True):
     enable_group_monitoring: bool = Field(default=False)
     # Whether to show approval buttons on DM/group reply suggestions
     enable_reply_approval: bool = Field(default=True)
+    enable_userbot_followups: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="true"),
+    )
+    enable_userbot_memory_ingest: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="true"),
+    )
+    userbot_followup_max_per_day: int = Field(
+        default=5,
+        sa_column=Column(Integer, nullable=False, server_default="5"),
+    )
+    userbot_memory_privacy_level: str = Field(
+        default="conservative",
+        sa_column=Column(String(30), nullable=False, server_default="conservative"),
+    )
     # Free-text description of topics the user finds interesting (fed to LLM filter)
     userbot_channel_interests: Optional[str] = Field(default=None)
 

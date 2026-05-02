@@ -246,6 +246,38 @@ async def channel_batch_flush_job(user_id: int):
         await session.close()
 
 
+async def userbot_followup_check_job(user_id: int | None = None):
+    """Send due persistent userbot follow-up reminders."""
+    logger.info(
+        "Running userbot follow-up check{}", f" for user {user_id}" if user_id else ""
+    )
+    session = AsyncSessionLocal()
+    try:
+        from ..services.userbot_thread_service import UserBotThreadService
+
+        bot = get_bot_instance()
+        sent = await UserBotThreadService().send_due_followups(
+            session=session,
+            bot=bot,
+            user_id=user_id,
+        )
+        await session.commit()
+        logger.info("Userbot follow-up check sent {} reminder(s)", sent)
+    except ModuleNotFoundError as exc:
+        if "userbot_thread" in str(exc):
+            logger.debug(
+                "Userbot follow-up check skipped; UserBotThread model is not available yet"
+            )
+            return
+        logger.exception("Error in userbot_followup_check_job: {}", exc)
+        await session.rollback()
+    except Exception as e:
+        logger.exception("Error in userbot_followup_check_job: {}", e)
+        await session.rollback()
+    finally:
+        await session.close()
+
+
 async def cleanup_expired_memories_job():
     """Cleanup episodes older than EPISODE_LIFETIME_DAYS and clear stale working memory."""
     logger.info("Running cleanup_expired_memories_job")

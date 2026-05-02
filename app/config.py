@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # --- OpenRouter / OpenAI Config ---
     OPENROUTER_API_KEY: str
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    
+
     # Models
     LLM_MODEL_ID: str
     AUDIO_IMAGE_MODEL_ID: str
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     EXTRACTOR_MODEL_ID: str
 
     # Site Info for OpenRouter Rankings
-    
+
     # Lifetime settings (in days)
     EPISODE_LIFETIME_DAYS: float = 2.5 * 30.0 / 30.0  # 2.5 months ~ 75 days (keep float for clarity)
     WORKING_MEMORY_LIFETIME_DAYS: int = 5
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Row-level integrity verification mode.
     # When True, any tracked row without integrity_sig is rejected on load.
     INTEGRITY_STRICT_MODE: bool = True
-    
+
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
@@ -56,11 +56,11 @@ class Settings(BaseSettings):
 
     # Admin
     ADMIN_USER_IDS: str = ""  # Comma-separated Telegram user IDs
-    
+
     # Monitoring
     SENTRY_DSN: str = ""
     ENABLE_METRICS: bool = False
-    
+
     # Rate limiting
     MAX_MESSAGES_PER_MINUTE: int = 15
 
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # Fact cleanup
     # similarity threshold for deduplication (cosine similarity). Value in [0,1].
     FACT_CLEANUP_SIMILARITY_THRESHOLD: float = 0.95
-    
+
     # Vector dimensions for embeddings (must match EMBEDDING_MODEL_ID output)
     VECTOR_DIM: int = 4096  # Qwen3-embedding-8b outputs 4096-dimensional vectors
 
@@ -76,10 +76,10 @@ class Settings(BaseSettings):
     TRIAL_DAYS: int = 7
     # 100 Stars is approx $2.00 (Standard Telegram pricing is ~0.02 USD per star)
     SUBSCRIPTION_PRICE_STARS: int = 100 
-    
+
     # Technical Limit (Anti-Spam)
     LIMIT_TECHNICAL_SECONDS: int = 2  # 1 message every 2 seconds
-    
+
     # Daily Quotas
     LIMIT_DAILY_TRIAL: int = 20      # Guest/Trial
     LIMIT_DAILY_PREMIUM: int = 200   # Subscriber
@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     USERBOT_CHANNEL_BATCH_MAX: int = 7
     # Interval (hours) for the periodic batch digest flush job
     USERBOT_CHANNEL_BATCH_FLUSH_HOURS: int = 4
+    # Persistent DM/group follow-up reminder checks
+    USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES: int = 15
+    USERBOT_MAX_FOLLOWUPS_PER_DAY: int = 5
+    USERBOT_FOLLOWUP_REMINDER_COOLDOWN_HOURS: int = 24
+    USERBOT_DEFAULT_FOLLOWUP_MINUTES: int = 120
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".

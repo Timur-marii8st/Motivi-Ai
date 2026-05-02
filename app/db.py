@@ -22,27 +22,32 @@ engine = create_async_engine(
     connect_args={"command_timeout": 30},
 )
 
+
 @event.listens_for(engine.sync_engine, "connect")
 def set_timezone(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("SET timezone='UTC'")
     cursor.close()
 
+
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 register_row_integrity_hooks()
 
+
 async def init_db() -> None:
     """Create tables and enable pgvector extension."""
-    from .models.users import User
-    from .models.core_memory import CoreMemory
-    from .models.working_memory import WorkingMemory
-    from .models.episode import Episode, EpisodeEmbedding
-    from .models.settings import UserSettings
-    from .models.habit import Habit, HabitLog
-    from .models.oauth_token import OAuthToken
-    from .models.profile_completeness import ProfileCompleteness
-    from .models.plan import Plan
-    from .models.user_trigger import UserTrigger
+    from .models.users import User  # noqa: F401
+    from .models.core_memory import CoreMemory  # noqa: F401
+    from .models.working_memory import WorkingMemory  # noqa: F401
+    from .models.episode import Episode, EpisodeEmbedding  # noqa: F401
+    from .models.settings import UserSettings  # noqa: F401
+    from .models.habit import Habit, HabitLog  # noqa: F401
+    from .models.oauth_token import OAuthToken  # noqa: F401
+    from .models.payment import Payment  # noqa: F401
+    from .models.profile_completeness import ProfileCompleteness  # noqa: F401
+    from .models.plan import Plan  # noqa: F401
+    from .models.user_trigger import UserTrigger  # noqa: F401
+    from .models.userbot_thread import UserBotThread  # noqa: F401
 
     async with engine.begin() as conn:
         # Enable pgvector
@@ -55,6 +60,7 @@ async def init_db() -> None:
             logger.info("Database tables created/verified (dev mode)")
         else:
             logger.info("Skipping SQLModel.metadata.create_all (ENV=%s)", settings.ENV)
+
 
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
