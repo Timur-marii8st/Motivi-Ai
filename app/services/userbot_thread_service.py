@@ -16,6 +16,7 @@ from ..config import settings as app_settings
 from ..llm.client import async_client
 from ..models.settings import UserSettings
 from ..models.users import User
+from ..utils.telegram_topics import topic_kwargs_for_user
 
 
 OPEN_STATUSES = ("open", "reminded")
@@ -340,7 +341,11 @@ class UserBotThreadService:
                     logger.debug("Could not attach userbot approval keyboard: {}", exc)
 
             await bot.send_message(
-                user.tg_chat_id, text, parse_mode="HTML", reply_markup=keyboard
+                user.tg_chat_id,
+                text,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                **topic_kwargs_for_user(user),
             )
             thread.reminded_at = datetime.now(timezone.utc)
             thread.status = "reminded"

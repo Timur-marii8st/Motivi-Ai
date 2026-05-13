@@ -26,6 +26,7 @@ from app.services.gamification.schemas import (
     GameEventType,
     MEMORY_MILESTONES,
 )
+from app.utils.telegram_topics import topic_kwargs_for_user
 
 
 class MilestoneService:
@@ -110,7 +111,7 @@ class MilestoneService:
                 default=DefaultBotProperties(parse_mode="HTML"),
             )
             try:
-                await bot.send_message(chat_id, message)
+                await bot.send_message(chat_id, message, **topic_kwargs_for_user(user))
             finally:
                 await bot.session.close()
 

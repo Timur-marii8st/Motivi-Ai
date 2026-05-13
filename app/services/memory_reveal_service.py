@@ -20,6 +20,7 @@ from app.models.core_memory import CoreFact, CoreMemory
 from app.models.users import User
 from app.services.event_bus import event_bus
 from app.services.gamification.schemas import GameEvent, GameEventType
+from app.utils.telegram_topics import topic_kwargs_for_user
 
 
 class MemoryRevealService:
@@ -146,7 +147,11 @@ class MemoryRevealService:
                 default=DefaultBotProperties(parse_mode="HTML"),
             )
             try:
-                await bot.send_message(user.tg_chat_id, message)
+                await bot.send_message(
+                    user.tg_chat_id,
+                    message,
+                    **topic_kwargs_for_user(user),
+                )
                 logger.info(
                     "Sent day {} memory reveal to user {} ({} facts)",
                     day,

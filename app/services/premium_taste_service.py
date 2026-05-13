@@ -16,6 +16,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.config import settings
 from app.db import AsyncSessionLocal
 from app.models.users import User
+from app.utils.telegram_topics import topic_kwargs_for_user
 
 
 class PremiumTasteService:
@@ -143,7 +144,10 @@ class PremiumTasteService:
             )
             try:
                 await bot.send_message(
-                    user.tg_chat_id, message, reply_markup=keyboard
+                    user.tg_chat_id,
+                    message,
+                    reply_markup=keyboard,
+                    **topic_kwargs_for_user(user),
                 )
                 logger.info("Sent premium taste to user {}", user_id)
             finally:

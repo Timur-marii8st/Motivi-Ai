@@ -26,6 +26,7 @@ from app.services.gamification.schemas import (
     GameEvent,
     GameEventType,
 )
+from app.utils.telegram_topics import topic_kwargs_for_user
 
 # ── Badge Definitions (data-driven) ──────────────────────────────
 BADGE_DEFINITIONS: list[BadgeDefinition] = [
@@ -210,7 +211,11 @@ async def _send_badge_celebration(user_id: int, badge: BadgeDefinition) -> None:
             default=DefaultBotProperties(parse_mode="HTML"),
         )
         try:
-            await bot.send_message(user.tg_chat_id, message)
+            await bot.send_message(
+                user.tg_chat_id,
+                message,
+                **topic_kwargs_for_user(user),
+            )
         finally:
             await bot.session.close()
     except Exception:

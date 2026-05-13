@@ -5,7 +5,9 @@ from datetime import datetime, timezone as _tz
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..models.users import User
 from ..models.plan import Plan
+from ..utils.telegram_topics import topic_kwargs_for_user
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -19,6 +21,10 @@ class ToolExecutor:
         if self.bot is None:
             raise RuntimeError("ToolExecutor requires bot instance for Telegram send operations")
         return self.bot
+
+    async def _topic_kwargs(self, user_id: int) -> dict[str, int]:
+        user = await self.session.get(User, user_id)
+        return topic_kwargs_for_user(user) if user else {}
 
     async def execute(self, tool_name: str, args: Dict[str, Any], chat_id: int, user_id: int) -> Dict[str, Any]:
         """
@@ -300,7 +306,7 @@ class ToolExecutor:
             }.get(plan_level, "")
 
             message = f"📋 <b>Твой план {duration_text}:</b>\n\n{plan_content}"
-            await bot.send_message(chat_id, message)
+            await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
 
             logger.info("Created {} plan for user {} (plan_id={})", plan_level, user_id, plan.id)
             return {"success": True, "plan_id": plan.id}
@@ -400,7 +406,7 @@ class ToolExecutor:
             }.get(plan.plan_level, "")
 
             message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{plan_content}"
-            await bot.send_message(chat_id, message)
+            await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
 
             logger.info("Edited plan {} for user {}", plan_id, user_id)
             return {
@@ -496,22 +502,27 @@ class ToolExecutor:
             bot = self._require_bot()
             sent_files: list[str] = []
             failed_files: list[str] = []
+            topic_kwargs = topic_kwargs_for_user(user)
             for fname, fdata in result.output_files:
                 from pathlib import Path
                 ext = Path(fname).suffix.lower()
                 try:
                     input_file = BufferedInputFile(fdata, filename=fname)
                     if ext in _IMAGE_EXTENSIONS and len(fdata) < _TELEGRAM_PHOTO_MAX_BYTES:
-                        await bot.send_photo(chat_id, input_file)
+                        await bot.send_photo(chat_id, input_file, **topic_kwargs)
                     else:
-                        await bot.send_document(chat_id, input_file)
+                        await bot.send_document(chat_id, input_file, **topic_kwargs)
                     sent_files.append(fname)
                     logger.info("Sent output file {} to chat {}", fname, chat_id)
                 except Exception as e:
                     if ext in _IMAGE_EXTENSIONS:
                         try:
                             fallback_file = BufferedInputFile(fdata, filename=fname)
-                            await bot.send_document(chat_id, fallback_file)
+                            await bot.send_document(
+                                chat_id,
+                                fallback_file,
+                                **topic_kwargs,
+                            )
                             sent_files.append(fname)
                             logger.info(
                                 "Sent output file {} to chat {} as document after photo send failed",

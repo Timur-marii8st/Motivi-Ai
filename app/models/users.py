@@ -1,7 +1,7 @@
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime, timezone, time, date, timedelta
 from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
-from sqlalchemy import DateTime, Column, String
+from sqlalchemy import BigInteger, DateTime, Column, String
 from ..config import settings
 
 from ..security.encrypted_types import EncryptedTextType, EncryptedJSONType
@@ -26,6 +26,10 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tg_user_id: int = Field(index=True)
     tg_chat_id: int = Field(index=True)
+    tg_private_topic_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+    )
 
     name: Optional[str] = Field(
         default=None,

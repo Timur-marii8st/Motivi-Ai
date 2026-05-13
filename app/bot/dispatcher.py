@@ -7,6 +7,7 @@ from loguru import logger
 from redis.asyncio import Redis
 
 from ..config import settings
+from .middlewares.command_cancel import CommandCancellationMiddleware
 from .middlewares.db_session import DBSessionMiddleware
 from ..middleware.rate_limit import RateLimitMiddleware
 from .routers.onboarding import router as onboarding_router
@@ -51,6 +52,7 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     # Middlewares
     dp.message.middleware(RateLimitMiddleware())
     dp.message.middleware(DBSessionMiddleware())
+    dp.message.middleware(CommandCancellationMiddleware())
     dp.callback_query.middleware(DBSessionMiddleware())
 
     # Routers

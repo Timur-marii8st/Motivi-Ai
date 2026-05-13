@@ -16,6 +16,7 @@ Design decisions
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from loguru import logger
@@ -23,6 +24,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from ..config import settings as app_settings
+from ..utils.telegram_mtproto import build_telethon_proxy
 
 # ── Active clients: bot user_id → TelegramClient ──────────────────────────────
 _clients: dict[int, TelegramClient] = {}
@@ -107,6 +109,7 @@ class UserBotManager:
             StringSession(session_string),
             app_settings.TELEGRAM_API_ID,
             app_settings.TELEGRAM_API_HASH,
+            proxy=build_telethon_proxy(app_settings.TELEGRAM_API_PROXY),
         )
         await client.connect()
 
@@ -156,7 +159,14 @@ class UserBotManager:
 
     @staticmethod
     def clear_pending(user_id: int) -> None:
-        _pending.pop(user_id, None)
+        pending = _pending.pop(user_id, None)
+        if not pending:
+            return
+
+        task = pending.get("login_task")
+        current = asyncio.current_task()
+        if task and task is not current and not task.done():
+            task.cancel()
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

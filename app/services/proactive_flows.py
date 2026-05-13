@@ -16,6 +16,7 @@ from ..llm.conversation_service import ConversationService
 from ..services.tool_executor import ToolExecutor
 from ..services.conversation_history_service import ConversationHistoryService
 from ..services.extractor_service import ExtractorService
+from ..utils.telegram_topics import topic_kwargs_for_user
 
 # Singleton embeddings shared across all ProactiveFlows instances
 _shared_embeddings = GeminiEmbeddings()
@@ -63,7 +64,11 @@ class ProactiveFlows:
         # Use return_exceptions so a Redis failure doesn't prevent message delivery.
         results = await asyncio.gather(
             ConversationHistoryService.save_history(user.tg_chat_id, updated_history),
-            self.bot.send_message(user.tg_chat_id, message_text),
+            self.bot.send_message(
+                user.tg_chat_id,
+                message_text,
+                **topic_kwargs_for_user(user),
+            ),
             return_exceptions=True,
         )
         for i, result in enumerate(results):

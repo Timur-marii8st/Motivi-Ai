@@ -31,8 +31,11 @@ class RateLimitMiddleware(BaseMiddleware):
         if not isinstance(event, Message) or not event.from_user:
             return await handler(event, data)
 
-        # Allow /subscribe and /start always to prevent soft-locks
-        if event.text and any(event.text.startswith(cmd) for cmd in ["/subscribe", "/start", "/help"]):
+        # Allow key recovery/help commands always to prevent soft-locks.
+        if event.text and any(
+            event.text.startswith(cmd)
+            for cmd in ["/subscribe", "/start", "/help", "/commands", "/cancel"]
+        ):
              return await handler(event, data)
 
         # Allow successful_payment messages through — they must reach the
@@ -108,9 +111,9 @@ class RateLimitMiddleware(BaseMiddleware):
             # Quota exceeded
             if status == "expired":
                 msg = (
-                    f"⛔️ <b>Free Trial Ended</b>\n\n"
-                    f"Your 7-day trial has expired. To continue using Motivi_AI, please subscribe.\n\n"
-                    f"Use /subscribe to unlock unlimited access."
+                    "⛔️ <b>Free Trial Ended</b>\n\n"
+                    "Your 7-day trial has expired. To continue using Motivi_AI, please subscribe.\n\n"
+                    "Use /subscribe to unlock unlimited access."
                 )
             else:  # status == 'trial'
                 msg = (

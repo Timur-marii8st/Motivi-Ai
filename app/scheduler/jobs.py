@@ -16,6 +16,7 @@ from ..models.working_memory import WorkingMemory, WorkingEmbedding
 from ..services.proactive_flows import ProactiveFlows
 from ..models.user_trigger import UserTrigger
 from ..config import settings
+from ..utils.telegram_topics import topic_kwargs_for_user
 
 
 async def _run_proactive_job(user_id: int, method_name: str) -> None:
@@ -165,7 +166,7 @@ async def send_one_off_reminder_job(user_id: int, chat_id: int, message_text: st
             logger.warning("User {} not found for one-off reminder", user_id)
             return
         bot = get_bot_instance()
-        await bot.send_message(chat_id, message_text)
+        await bot.send_message(chat_id, message_text, **topic_kwargs_for_user(user))
         logger.info("Sent one-off reminder to user {} in chat {}", user_id, chat_id)
     except Exception as e:
         logger.exception("Error in send_one_off_reminder_job for user {}: {}", user_id, e)
@@ -218,7 +219,11 @@ async def habit_reminder_job(habit_id: int):
             f"Don't forget! Current streak: {habit.current_streak} \U0001f525\n"
             f"Reply with /log_habit {habit.id} to mark as done."
         )
-        await bot.send_message(user.tg_chat_id, message)
+        await bot.send_message(
+            user.tg_chat_id,
+            message,
+            **topic_kwargs_for_user(user),
+        )
         logger.info("Sent habit reminder for habit {} to user {}", habit_id, user.id)
     except Exception as e:
         logger.exception("Error in habit_reminder_job for habit {}: {}", habit_id, e)
@@ -395,7 +400,8 @@ async def memory_decay_warning_job():
                 await bot.send_message(
                     user.tg_chat_id,
                     "🧠 Some of your recent context is fading from my working memory. "
-                    "Chat with me today to keep it fresh!"
+                    "Chat with me today to keep it fresh!",
+                    **topic_kwargs_for_user(user),
                 )
             finally:
                 await bot.session.close()
