@@ -140,6 +140,12 @@ class Settings(BaseSettings):
     USERBOT_MAX_FOLLOWUPS_PER_DAY: int = 5
     USERBOT_FOLLOWUP_REMINDER_COOLDOWN_HOURS: int = 24
     USERBOT_DEFAULT_FOLLOWUP_MINUTES: int = 120
+    # Generate optional multi-step action drafts for incoming DM/group messages.
+    USERBOT_ACTION_PLAN_ENABLED: bool = True
+    # How many recent private dialogs may be offered to the LLM as safe target candidates.
+    USERBOT_ACTION_TARGET_DIALOG_LIMIT: int = 20
+    # Hard cap for action-plan steps shown in one notification.
+    USERBOT_ACTION_PLAN_MAX_STEPS: int = 5
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".

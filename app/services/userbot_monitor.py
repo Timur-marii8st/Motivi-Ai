@@ -36,7 +36,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -45,6 +45,7 @@ from telethon import TelegramClient, events
 
 from ..config import settings as app_settings
 from ..llm.client import async_client
+from ..utils.telegram_topics import topic_kwargs_for_user
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -56,6 +57,17 @@ if TYPE_CHECKING:
 
 def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
     """Register all Telethon event handlers for *one* user's client."""
+    assistant_bot_id: int | None = None
+
+    async def resolve_assistant_bot_id() -> int | None:
+        nonlocal assistant_bot_id
+        if assistant_bot_id is not None:
+            return assistant_bot_id
+        try:
+            assistant_bot_id = int((await bot.get_me()).id)
+        except Exception as exc:
+            logger.debug("Could not resolve aiogram bot id for userbot filters: {}", exc)
+        return assistant_bot_id
 
     @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_channel and not e.is_group))
     async def on_channel_post(event):
@@ -63,16 +75,32 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
 
     @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
     async def on_dm(event):
-        await _handle_dm(event, user_id, bot, client)
+        await _handle_dm(
+            event,
+            user_id,
+            bot,
+            client,
+            assistant_bot_id=await resolve_assistant_bot_id(),
+        )
 
     @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_group))
     async def on_group(event):
-        await _handle_group_message(event, user_id, bot, client)
+        await _handle_group_message(
+            event,
+            user_id,
+            bot,
+            client,
+            assistant_bot_id=await resolve_assistant_bot_id(),
+        )
 
     # Learn communication style from the user's own outgoing messages
     @client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private or e.is_group))
     async def on_outgoing(event):
-        await _handle_outgoing_message(event, user_id)
+        await _handle_outgoing_message(
+            event,
+            user_id,
+            assistant_bot_id=await resolve_assistant_bot_id(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +169,7 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
                 f"https://t.me/{channel_username}/{event.message.id}"
             )
 
-        tg_id = await _get_tg_chat_id(user_id)
+        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
             return
 
@@ -155,7 +183,11 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
                 post_link=post_link,
             )
             await bot.send_message(
-                tg_id, notification, parse_mode="HTML", disable_web_page_preview=True,
+                tg_id,
+                notification,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                **topic_kwargs,
             )
             # Save to conversation history so LLM knows what user was notified about
             await _save_notification_to_history(
@@ -188,13 +220,21 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
 # Outgoing message handler — style learning
 # ---------------------------------------------------------------------------
 
-async def _handle_outgoing_message(event, user_id: int) -> None:
+async def _handle_outgoing_message(
+    event,
+    user_id: int,
+    *,
+    assistant_bot_id: int | None = None,
+) -> None:
     """
     Collect the user's own outgoing messages as communication style samples.
     Stored in a Redis ring buffer (LPUSH + LTRIM).
     Bot-sent replies are filtered out via a short-lived skip marker.
     """
     try:
+        if _is_private_chat_with_telegram_id(event, assistant_bot_id):
+            return
+
         text: str = event.message.message or ""
         if not text.strip() or len(text) < 5:
             return
@@ -234,8 +274,20 @@ async def _handle_outgoing_message(event, user_id: int) -> None:
 # DM handler — with approval buttons
 # ---------------------------------------------------------------------------
 
-async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) -> None:
+async def _handle_dm(
+    event,
+    user_id: int,
+    bot: "Bot",
+    client: TelegramClient,
+    *,
+    assistant_bot_id: int | None = None,
+) -> None:
     try:
+        if _is_outgoing_event(event) or _should_ignore_assistant_bot_event(
+            event, assistant_bot_id
+        ):
+            return
+
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_dm_notifications:
             return
@@ -245,6 +297,9 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
             return
 
         sender = await event.get_sender()
+        if _is_telegram_bot_sender(sender):
+            return
+
         first = getattr(sender, "first_name", None) or ""
         last = getattr(sender, "last_name", None) or ""
         sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
@@ -306,6 +361,26 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
             suggestions=suggestions,
         )
 
+        action_plan = None
+        if app_settings.USERBOT_ACTION_PLAN_ENABLED:
+            target_candidates = await _fetch_action_target_candidates(
+                client=client,
+                event=event,
+                sender=sender,
+                sender_name=sender_name,
+                assistant_bot_id=assistant_bot_id,
+            )
+            action_plan = await _generate_action_plan(
+                user_id=user_id,
+                message_text=text,
+                sender_name=sender_name,
+                chat_type="dm",
+                conversation_thread=thread,
+                user_facts=facts,
+                style_samples=style_samples,
+                target_candidates=target_candidates,
+            )
+
         preview = text[:400].strip()
         if len(text) > 400:
             preview += "…"
@@ -319,11 +394,13 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
         )
         for i, s in enumerate(suggestions, 1):
             notification += f"{i}️⃣ {_esc(s)}\n"
+        if action_plan:
+            notification += _format_action_plan_for_notification(action_plan)
 
         # Determine if we show approval buttons
         show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
 
-        tg_id = await _get_tg_chat_id(user_id)
+        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
             return
 
@@ -339,13 +416,34 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
                 suggestions=suggestions,
                 thread_id=thread_id,
             )
+            if action_plan:
+                action_plan["user_id"] = user_id
+                action_plan["reply_pending_key"] = pending_key
+                action_plan["thread_id"] = thread_id
+                action_plan["source_chat_id"] = event.chat_id
+                action_plan["source_message_id"] = event.message.id
+                action_plan["suggestions"] = suggestions
+                action_plan["owner_tg_chat_id"] = tg_id
+                action_plan["notification_text"] = notification
+                await _store_pending_action_plan(
+                    pending_key=pending_key,
+                    action_plan=action_plan,
+                )
 
-            keyboard = _build_approval_keyboard(pending_key, len(suggestions))
+            keyboard = build_userbot_approval_keyboard(
+                pending_key,
+                len(suggestions),
+                action_plan=action_plan,
+            )
             await bot.send_message(
-                tg_id, notification, parse_mode="HTML", reply_markup=keyboard
+                tg_id,
+                notification,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                **topic_kwargs,
             )
         else:
-            await bot.send_message(tg_id, notification, parse_mode="HTML")
+            await bot.send_message(tg_id, notification, parse_mode="HTML", **topic_kwargs)
 
         logger.info(
             "Userbot: sent DM notification to user {} from {}", user_id, sender_name
@@ -359,13 +457,23 @@ async def _handle_dm(event, user_id: int, bot: "Bot", client: TelegramClient) ->
 # ---------------------------------------------------------------------------
 
 async def _handle_group_message(
-    event, user_id: int, bot: "Bot", client: TelegramClient
+    event,
+    user_id: int,
+    bot: "Bot",
+    client: TelegramClient,
+    *,
+    assistant_bot_id: int | None = None,
 ) -> None:
     """
     Handle incoming group/supergroup messages.
     Only react to messages that mention the user or reply to the user's messages.
     """
     try:
+        if _is_outgoing_event(event) or _should_ignore_assistant_bot_event(
+            event, assistant_bot_id
+        ):
+            return
+
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_group_monitoring:
             return
@@ -378,6 +486,18 @@ async def _handle_group_message(
         # 1. Direct reply to user's message
         # 2. Message mentions the user
         me = await client.get_me()
+        if _ids_equal(_event_sender_id(event), getattr(me, "id", None)):
+            return
+
+        sender = await event.get_sender()
+        if _is_telegram_bot_sender(sender):
+            return
+
+        first = getattr(sender, "first_name", None) or ""
+        last = getattr(sender, "last_name", None) or ""
+        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        sender_tg_id = getattr(sender, "id", 0)
+
         is_reply_to_me = False
         if event.message.reply_to:
             try:
@@ -414,12 +534,6 @@ async def _handle_group_message(
                 return
         finally:
             await redis.aclose()
-
-        sender = await event.get_sender()
-        first = getattr(sender, "first_name", None) or ""
-        last = getattr(sender, "last_name", None) or ""
-        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
-        sender_tg_id = getattr(sender, "id", 0)
 
         chat = await event.get_chat()
         chat_title = getattr(chat, "title", None) or f"group {event.chat_id}"
@@ -475,6 +589,26 @@ async def _handle_group_message(
             suggestions=suggestions,
         )
 
+        action_plan = None
+        if app_settings.USERBOT_ACTION_PLAN_ENABLED:
+            target_candidates = await _fetch_action_target_candidates(
+                client=client,
+                event=event,
+                sender=sender,
+                sender_name=sender_name,
+                assistant_bot_id=assistant_bot_id,
+            )
+            action_plan = await _generate_action_plan(
+                user_id=user_id,
+                message_text=text,
+                sender_name=sender_name,
+                chat_type="group",
+                conversation_thread=thread,
+                user_facts=facts,
+                style_samples=style_samples,
+                target_candidates=target_candidates,
+            )
+
         preview = text[:400].strip()
         if len(text) > 400:
             preview += "…"
@@ -489,8 +623,10 @@ async def _handle_group_message(
         )
         for i, s in enumerate(suggestions, 1):
             notification += f"{i}️⃣ {_esc(s)}\n"
+        if action_plan:
+            notification += _format_action_plan_for_notification(action_plan)
 
-        tg_id = await _get_tg_chat_id(user_id)
+        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
             return
 
@@ -507,12 +643,33 @@ async def _handle_group_message(
                 suggestions=suggestions,
                 thread_id=thread_id,
             )
-            keyboard = _build_approval_keyboard(pending_key, len(suggestions))
+            if action_plan:
+                action_plan["user_id"] = user_id
+                action_plan["reply_pending_key"] = pending_key
+                action_plan["thread_id"] = thread_id
+                action_plan["source_chat_id"] = event.chat_id
+                action_plan["source_message_id"] = event.message.id
+                action_plan["suggestions"] = suggestions
+                action_plan["owner_tg_chat_id"] = tg_id
+                action_plan["notification_text"] = notification
+                await _store_pending_action_plan(
+                    pending_key=pending_key,
+                    action_plan=action_plan,
+                )
+            keyboard = build_userbot_approval_keyboard(
+                pending_key,
+                len(suggestions),
+                action_plan=action_plan,
+            )
             await bot.send_message(
-                tg_id, notification, parse_mode="HTML", reply_markup=keyboard
+                tg_id,
+                notification,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                **topic_kwargs,
             )
         else:
-            await bot.send_message(tg_id, notification, parse_mode="HTML")
+            await bot.send_message(tg_id, notification, parse_mode="HTML", **topic_kwargs)
 
         logger.info(
             "Userbot: sent group notification to user {} from {} in {}",
@@ -526,8 +683,13 @@ async def _handle_group_message(
 # Approval keyboard builder
 # ---------------------------------------------------------------------------
 
-def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard with Send/Edit/Dismiss buttons."""
+def build_userbot_approval_keyboard(
+    pending_key: str,
+    num_suggestions: int,
+    *,
+    action_plan: dict | None = None,
+) -> InlineKeyboardMarkup:
+    """Build inline keyboard with reply and optional action-plan approval buttons."""
     rows: list[list[InlineKeyboardButton]] = []
 
     # Row of suggestion buttons
@@ -539,7 +701,48 @@ def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKe
                 callback_data=f"ub_send:{pending_key}:{i}",
             )
         )
-    rows.append(suggestion_buttons)
+    if suggestion_buttons:
+        rows.append(suggestion_buttons)
+
+    if action_plan:
+        safe_pending = False
+        for index, step in enumerate(action_plan.get("steps", [])):
+            if step.get("status") == "done" or not _action_step_is_executable(step):
+                continue
+
+            if not step.get("requires_separate_approval"):
+                safe_pending = True
+
+            row = [
+                InlineKeyboardButton(
+                    text=f"▶️ Step {index + 1}",
+                    callback_data=f"ub_plan_step:{pending_key}:{index}",
+                )
+            ]
+            if _action_step_is_editable(step):
+                row.append(
+                    InlineKeyboardButton(
+                        text=f"✏️ Edit {index + 1}",
+                        callback_data=f"ub_plan_edit:{pending_key}:{index}",
+                    )
+                )
+            rows.append(row)
+
+        plan_row: list[InlineKeyboardButton] = []
+        if safe_pending:
+            plan_row.append(
+                InlineKeyboardButton(
+                    text="✅ Run safe steps",
+                    callback_data=f"ub_plan_all:{pending_key}",
+                )
+            )
+        plan_row.append(
+            InlineKeyboardButton(
+                text="🚫 Dismiss plan",
+                callback_data=f"ub_plan_dismiss:{pending_key}",
+            )
+        )
+        rows.append(plan_row)
 
     # Edit and dismiss row
     rows.append([
@@ -554,6 +757,10 @@ def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKe
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKeyboardMarkup:
+    return build_userbot_approval_keyboard(pending_key, num_suggestions)
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +828,51 @@ async def delete_pending_reply(pending_key: str) -> None:
     """Remove a pending reply from Redis after it's been handled."""
     redis = await _get_redis()
     try:
-        await redis.delete(f"ub_pending:{pending_key}")
+        await redis.delete(f"ub_pending:{pending_key}", f"ub_action_plan:{pending_key}")
+    finally:
+        await redis.aclose()
+
+
+async def _store_pending_action_plan(*, pending_key: str, action_plan: dict) -> None:
+    """Store a pending action plan under the same key as its reply notification."""
+    redis = await _get_redis()
+    try:
+        await redis.setex(
+            f"ub_action_plan:{pending_key}",
+            app_settings.USERBOT_REPLY_TIMEOUT,
+            json.dumps(action_plan, ensure_ascii=False),
+        )
+    finally:
+        await redis.aclose()
+
+
+async def get_pending_action_plan(pending_key: str) -> dict | None:
+    redis = await _get_redis()
+    try:
+        raw = await redis.get(f"ub_action_plan:{pending_key}")
+        if not raw:
+            return None
+        return json.loads(raw)
+    finally:
+        await redis.aclose()
+
+
+async def save_pending_action_plan(pending_key: str, action_plan: dict) -> None:
+    redis = await _get_redis()
+    try:
+        await redis.setex(
+            f"ub_action_plan:{pending_key}",
+            app_settings.USERBOT_REPLY_TIMEOUT,
+            json.dumps(action_plan, ensure_ascii=False),
+        )
+    finally:
+        await redis.aclose()
+
+
+async def delete_pending_action_plan(pending_key: str) -> None:
+    redis = await _get_redis()
+    try:
+        await redis.delete(f"ub_action_plan:{pending_key}")
     finally:
         await redis.aclose()
 
@@ -922,6 +1173,330 @@ async def _update_sender_relationship(
         await redis.aclose()
 
 
+# ---------------------------------------------------------------------------
+# Action-plan context and validation
+# ---------------------------------------------------------------------------
+
+async def _fetch_action_target_candidates(
+    *,
+    client: TelegramClient,
+    event,
+    sender,
+    sender_name: str,
+    assistant_bot_id: int | None,
+) -> list[dict]:
+    """
+    Build an allowlist of private chats the action planner may target.
+    The LLM only receives refs; executable steps are accepted only if the ref
+    maps back to one of these candidates.
+    """
+    candidates: list[dict] = []
+    seen_chat_ids: set[int] = set()
+
+    def add_candidate(*, ref: str, label: str, chat_id: int, username: str | None = None) -> None:
+        if _ids_equal(chat_id, assistant_bot_id) or chat_id in seen_chat_ids:
+            return
+        clean_label = _short_summary(label, 80)
+        if not clean_label:
+            return
+        seen_chat_ids.add(chat_id)
+        candidates.append(
+            {
+                "ref": ref,
+                "label": clean_label,
+                "chat_id": chat_id,
+                "username": username,
+            }
+        )
+
+    sender_id = _coerce_int(getattr(sender, "id", None))
+    if sender_id and not _is_telegram_bot_sender(sender):
+        sender_username = getattr(sender, "username", None)
+        target_chat_id = _event_chat_id(event) if getattr(event, "is_private", False) else sender_id
+        if target_chat_id:
+            add_candidate(
+                ref="sender",
+                label=sender_name,
+                chat_id=target_chat_id,
+                username=sender_username,
+            )
+
+    try:
+        limit = max(0, app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT)
+        index = 1
+        async for dialog in client.iter_dialogs(limit=limit):
+            if not getattr(dialog, "is_user", False):
+                continue
+            entity = getattr(dialog, "entity", None)
+            if not entity or _is_telegram_bot_sender(entity):
+                continue
+
+            chat_id = _coerce_int(getattr(dialog, "id", None) or getattr(entity, "id", None))
+            if not chat_id:
+                continue
+            first = getattr(entity, "first_name", None) or ""
+            last = getattr(entity, "last_name", None) or ""
+            label = (
+                f"{first} {last}".strip()
+                or getattr(entity, "username", None)
+                or getattr(dialog, "name", None)
+                or f"user {chat_id}"
+            )
+            add_candidate(
+                ref=f"contact_{index}",
+                label=label,
+                chat_id=chat_id,
+                username=getattr(entity, "username", None),
+            )
+            index += 1
+    except Exception as exc:
+        logger.debug("Userbot action target fetch failed: {}", exc)
+
+    return candidates[: app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT + 1]
+
+
+def _action_target_prompt(candidates: list[dict]) -> str:
+    if not candidates:
+        return "No contact targets are safely resolvable."
+    lines = []
+    for candidate in candidates[: app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT + 1]:
+        username = candidate.get("username")
+        suffix = f" (@{username})" if username else ""
+        lines.append(f"- {candidate['ref']}: {candidate['label']}{suffix}")
+    return "\n".join(lines)
+
+
+async def _generate_action_plan(
+    *,
+    user_id: int,
+    message_text: str,
+    sender_name: str,
+    chat_type: str,
+    conversation_thread: list[dict],
+    user_facts: list[str],
+    style_samples: list[str],
+    target_candidates: list[dict],
+) -> dict | None:
+    """
+    Ask the LLM for an optional multi-step action draft and validate it.
+    Returns None when a single reply is enough or the draft is unsafe.
+    """
+    try:
+        context_parts = [
+            f"Current UTC time: {datetime.now(timezone.utc).isoformat()}",
+            f"Chat type: {chat_type}",
+            f"Current sender: {sender_name}",
+            "Allowed contact target refs:\n" + _action_target_prompt(target_candidates),
+        ]
+        if user_facts:
+            context_parts.append("User facts:\n" + "\n".join(f"- {f}" for f in user_facts[:12]))
+        if style_samples:
+            context_parts.append(
+                "Recent user writing style:\n"
+                + "\n".join(f"- {sample}" for sample in style_samples[:8])
+            )
+        if conversation_thread:
+            context_parts.append("Conversation:\n" + _thread_summary(conversation_thread, limit=1200))
+
+        response = await async_client.chat.completions.create(
+            model=app_settings.EXTRACTOR_MODEL_ID,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You draft safe multi-step Telegram action plans for a personal assistant.\n"
+                        "Return ONLY valid JSON.\n"
+                        "If one normal reply is enough, return {\"should_propose\": false, \"steps\": []}.\n"
+                        "Use a plan only when the incoming message likely needs coordination, "
+                        "a follow-up, a reminder, or contacting another known person.\n"
+                        "Allowed step types:\n"
+                        "- reply_to_sender: fields text, reason\n"
+                        "- send_message_to_contact: fields target_ref, text, reason; target_ref MUST be from the allowlist\n"
+                        "- create_reminder: fields message_text, reminder_datetime_iso, reason; ISO must include timezone when possible\n"
+                        "- ask_user_clarification: fields question, reason\n"
+                        "Never invent contact refs. Never include more than "
+                        f"{app_settings.USERBOT_ACTION_PLAN_MAX_STEPS} steps."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "<context>\n"
+                        + "\n\n".join(context_parts)
+                        + "\n</context>\n\n"
+                        f"<new_message>\n{sender_name}: {message_text[:800]}\n</new_message>"
+                    ),
+                },
+            ],
+            max_tokens=700,
+            temperature=0.2,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        parsed = _parse_json_object(raw)
+        return _sanitize_action_plan(parsed, target_candidates)
+    except Exception as exc:
+        logger.debug("Userbot action plan generation failed for user {}: {}", user_id, exc)
+        return None
+
+
+def _parse_json_object(raw: str) -> dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise
+        value = json.loads(match.group(0))
+    if not isinstance(value, dict):
+        raise ValueError("Action plan JSON root must be an object")
+    return value
+
+
+def _sanitize_action_plan(raw_plan: dict, target_candidates: list[dict]) -> dict | None:
+    if not raw_plan.get("should_propose"):
+        return None
+
+    candidate_by_ref = {
+        str(candidate.get("ref")): candidate for candidate in target_candidates if candidate.get("ref")
+    }
+    steps: list[dict] = []
+    raw_steps = raw_plan.get("steps")
+    if not isinstance(raw_steps, list):
+        return None
+
+    for raw_step in raw_steps[: app_settings.USERBOT_ACTION_PLAN_MAX_STEPS]:
+        if not isinstance(raw_step, dict):
+            continue
+        step = _sanitize_action_step(raw_step, candidate_by_ref)
+        if step:
+            steps.append(step)
+
+    if not steps:
+        return None
+
+    return {
+        "title": _short_summary(str(raw_plan.get("title") or "Suggested action plan"), 80),
+        "steps": steps,
+    }
+
+
+def _sanitize_action_step(raw_step: dict, candidate_by_ref: dict[str, dict]) -> dict | None:
+    step_type = str(raw_step.get("type") or "").strip()
+    reason = _short_summary(str(raw_step.get("reason") or ""), 160)
+
+    if step_type == "reply_to_sender":
+        text = _short_summary(str(raw_step.get("text") or ""), 900)
+        if not text:
+            return None
+        return {
+            "type": "reply_to_sender",
+            "text": text,
+            "reason": reason,
+            "status": "pending",
+            "requires_separate_approval": False,
+        }
+
+    if step_type == "send_message_to_contact":
+        text = _short_summary(str(raw_step.get("text") or ""), 900)
+        target_ref = str(raw_step.get("target_ref") or "").strip()
+        target = candidate_by_ref.get(target_ref)
+        if not text:
+            return None
+        if not target:
+            target_name = _short_summary(str(raw_step.get("target_name") or target_ref or "contact"), 80)
+            return {
+                "type": "ask_user_clarification",
+                "question": f"Which Telegram chat should receive this draft for {target_name}?",
+                "draft_text": text,
+                "reason": reason,
+                "status": "pending",
+                "requires_separate_approval": False,
+            }
+        return {
+            "type": "send_message_to_contact",
+            "target_ref": target_ref,
+            "target_chat_id": target["chat_id"],
+            "target_label": target["label"],
+            "text": text,
+            "reason": reason,
+            "status": "pending",
+            "requires_separate_approval": True,
+        }
+
+    if step_type == "create_reminder":
+        message_text = _short_summary(str(raw_step.get("message_text") or ""), 500)
+        reminder_datetime_iso = _short_summary(
+            str(raw_step.get("reminder_datetime_iso") or ""), 80
+        )
+        if not message_text:
+            return None
+        return {
+            "type": "create_reminder",
+            "message_text": message_text,
+            "reminder_datetime_iso": reminder_datetime_iso,
+            "reason": reason,
+            "status": "pending",
+            "requires_separate_approval": False,
+        }
+
+    if step_type == "ask_user_clarification":
+        question = _short_summary(str(raw_step.get("question") or ""), 400)
+        if not question:
+            return None
+        return {
+            "type": "ask_user_clarification",
+            "question": question,
+            "reason": reason,
+            "status": "pending",
+            "requires_separate_approval": False,
+        }
+
+    return None
+
+
+def _format_action_plan_for_notification(action_plan: dict) -> str:
+    steps = action_plan.get("steps") or []
+    if not steps:
+        return ""
+
+    lines = ["\n🧭 <b>Suggested action plan:</b>"]
+    for index, step in enumerate(steps, 1):
+        lines.append(f"{index}. {_esc(_describe_action_step(step))}")
+    return "\n".join(lines) + "\n"
+
+
+def _describe_action_step(step: dict) -> str:
+    step_type = step.get("type")
+    if step_type == "reply_to_sender":
+        return f"Reply here: {step.get('text', '')}"
+    if step_type == "send_message_to_contact":
+        return f"Message {step.get('target_label', 'contact')}: {step.get('text', '')}"
+    if step_type == "create_reminder":
+        when = step.get("reminder_datetime_iso") or "time not set"
+        return f"Create reminder ({when}): {step.get('message_text', '')}"
+    if step_type == "ask_user_clarification":
+        draft = step.get("draft_text")
+        suffix = f" Draft: {draft}" if draft else ""
+        return f"Ask you: {step.get('question', '')}{suffix}"
+    return "Review suggested action"
+
+
+def _action_step_is_executable(step: dict) -> bool:
+    if step.get("type") in {"reply_to_sender", "send_message_to_contact"}:
+        return bool(step.get("text"))
+    if step.get("type") == "create_reminder":
+        return bool(step.get("message_text") and step.get("reminder_datetime_iso"))
+    return False
+
+
+def _action_step_is_editable(step: dict) -> bool:
+    return step.get("type") in {"reply_to_sender", "send_message_to_contact"}
+
+
 # ===========================================================================
 # LLM helpers
 # ===========================================================================
@@ -1102,10 +1677,14 @@ async def flush_channel_batch(user_id: int, bot: "Bot") -> None:
     items.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     digest = _format_batch_digest(items)
-    tg_id = await _get_tg_chat_id(user_id)
+    tg_id, topic_kwargs = await _get_tg_delivery(user_id)
     if tg_id and digest:
         await bot.send_message(
-            tg_id, digest, parse_mode="HTML", disable_web_page_preview=True,
+            tg_id,
+            digest,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            **topic_kwargs,
         )
         # Save summarized digest to conversation history
         summaries = "; ".join(
@@ -1349,16 +1928,24 @@ async def _get_channel_interests(user_id: int) -> str:
 
 async def _get_tg_chat_id(user_id: int) -> int | None:
     """Look up the Telegram chat_id (tg_chat_id) for sending bot notifications."""
+    chat_id, _ = await _get_tg_delivery(user_id)
+    return chat_id
+
+
+async def _get_tg_delivery(user_id: int) -> tuple[int | None, dict[str, int]]:
+    """Look up Telegram chat_id and private-topic kwargs for bot notifications."""
     try:
         from ..db import get_session
         from ..models.users import User
 
         async with get_session() as session:
             user = await session.get(User, user_id)
-            return user.tg_chat_id if user else None
+            if not user:
+                return None, {}
+            return user.tg_chat_id, topic_kwargs_for_user(user)
     except Exception as exc:
         logger.error("Userbot: could not fetch tg_chat_id for user {}: {}", user_id, exc)
-        return None
+        return None, {}
 
 
 async def _get_redis():
@@ -1369,6 +1956,57 @@ async def _get_redis():
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
+def _event_sender_id(event) -> int | None:
+    sender_id = getattr(event, "sender_id", None)
+    if sender_id is None:
+        sender_id = getattr(getattr(event, "message", None), "sender_id", None)
+    return _coerce_int(sender_id)
+
+
+def _event_chat_id(event) -> int | None:
+    return _coerce_int(getattr(event, "chat_id", None))
+
+
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ids_equal(left, right) -> bool:
+    left_int = _coerce_int(left)
+    right_int = _coerce_int(right)
+    return left_int is not None and right_int is not None and left_int == right_int
+
+
+def _is_outgoing_event(event) -> bool:
+    message = getattr(event, "message", None)
+    return bool(getattr(event, "out", False) or getattr(message, "out", False))
+
+
+def _is_private_chat_with_telegram_id(event, telegram_id: int | None) -> bool:
+    return bool(
+        telegram_id is not None
+        and getattr(event, "is_private", False)
+        and _ids_equal(_event_chat_id(event), telegram_id)
+    )
+
+
+def _should_ignore_assistant_bot_event(event, assistant_bot_id: int | None) -> bool:
+    if assistant_bot_id is None:
+        return False
+    return _ids_equal(
+        _event_sender_id(event), assistant_bot_id
+    ) or _is_private_chat_with_telegram_id(event, assistant_bot_id)
+
+
+def _is_telegram_bot_sender(sender) -> bool:
+    return bool(getattr(sender, "bot", False))
+
 
 def _esc(text: str) -> str:
     """Escape HTML special characters for Telegram HTML parse mode."""

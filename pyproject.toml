@@ -41,6 +41,7 @@ psycopg2-binary = "^2.9.10"
 tink = "^1.12.0"
 telethon = "^1.36.0"
 aiohttp-socks = "^0.11.0"
+qrcode = {version = "^7.4.2", extras = ["pil"]}
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.6.9"
