@@ -181,10 +181,13 @@ async def _is_break_mode_active(session: AsyncSession, user_id: int) -> bool:
     user_settings = result.scalar_one_or_none()
     if not user_settings or not user_settings.break_mode_active:
         return False
+    until = user_settings.break_mode_until
+    if until and until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
-    if user_settings.break_mode_until and user_settings.break_mode_until > now:
+    if until and until > now:
         return True
-    if user_settings.break_mode_until and user_settings.break_mode_until <= now:
+    if until and until <= now:
         user_settings.break_mode_active = False
         user_settings.break_mode_until = None
         session.add(user_settings)

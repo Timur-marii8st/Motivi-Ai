@@ -111,6 +111,8 @@ def _is_break_mode_active(user_settings) -> bool:
     if not getattr(user_settings, "break_mode_active", False):
         return False
     until = getattr(user_settings, "break_mode_until", None)
+    if until and until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
     return not until or until > datetime.now(timezone.utc)
 
 
