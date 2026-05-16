@@ -192,7 +192,7 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
-    if x_telegram_bot_api_secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
+    if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.TELEGRAM_WEBHOOK_SECRET or ""):
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     data: Dict[str, Any] = await request.json()

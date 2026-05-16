@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, TYPE_CHECKING
 from datetime import datetime, timezone as _tz
+import html
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -305,7 +306,7 @@ class ToolExecutor:
                 "monthly": "на месяц",
             }.get(plan_level, "")
 
-            message = f"📋 <b>Твой план {duration_text}:</b>\n\n{plan_content}"
+            message = f"📋 <b>Твой план {duration_text}:</b>\n\n{html.escape(plan_content)}"
             await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
 
             logger.info("Created {} plan for user {} (plan_id={})", plan_level, user_id, plan.id)
@@ -405,7 +406,7 @@ class ToolExecutor:
                 "monthly": "на месяц",
             }.get(plan.plan_level, "")
 
-            message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{plan_content}"
+            message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{html.escape(plan_content)}"
             await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
 
             logger.info("Edited plan {} for user {}", plan_id, user_id)

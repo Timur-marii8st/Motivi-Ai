@@ -1,4 +1,5 @@
 from __future__ import annotations
+import html
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram import Bot
@@ -72,7 +73,7 @@ async def admin_broadcast(message: Message, session, bot: Bot):
     
     for user in users:
         try:
-            await bot.send_message(user.tg_chat_id, f"📢 <b>Объявление:</b>\n\n{broadcast_msg}")
+            await bot.send_message(user.tg_chat_id, f"📢 <b>Объявление:</b>\n\n{html.escape(broadcast_msg)}")
             sent += 1
         except Exception as e:
             logger.error("Broadcast failed for user {}: {}", user.id, e)

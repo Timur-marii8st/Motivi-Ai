@@ -107,10 +107,19 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
 # Channel post handler
 # ---------------------------------------------------------------------------
 
+def _is_break_mode_active(user_settings) -> bool:
+    if not getattr(user_settings, "break_mode_active", False):
+        return False
+    until = getattr(user_settings, "break_mode_until", None)
+    return not until or until > datetime.now(timezone.utc)
+
+
 async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
     try:
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_channel_monitoring:
+            return
+        if user_settings and _is_break_mode_active(user_settings):
             return
 
         chat = await event.get_chat()
@@ -290,6 +299,8 @@ async def _handle_dm(
 
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_dm_notifications:
+            return
+        if user_settings and _is_break_mode_active(user_settings):
             return
 
         text: str = event.message.message or ""
@@ -477,6 +488,8 @@ async def _handle_group_message(
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_group_monitoring:
             return
+        if user_settings and _is_break_mode_active(user_settings):
+            return
 
         text: str = event.message.message or ""
         if not text.strip():
@@ -530,7 +543,7 @@ async def _handle_group_message(
                 pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
                 pipe_result = await pipe.execute()
             count = int(pipe_result[0])
-            if count > app_settings.USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY:
+            if count > app_settings.USERBOT_MAX_GROUP_NOTIFS_PER_DAY:
                 return
         finally:
             await redis.aclose()
@@ -1652,6 +1665,10 @@ async def flush_channel_batch(user_id: int, bot: "Bot") -> None:
     Called by the auto-flush threshold in _handle_channel_post and by the
     periodic scheduler job.
     """
+    user_settings = await _get_user_settings(user_id)
+    if user_settings and _is_break_mode_active(user_settings):
+        return
+
     redis = await _get_redis()
     try:
         list_key = f"ub_channel_batch:{user_id}"

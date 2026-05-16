@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     TELEGRAM_API_HASH: str = ""
     # Max notifications per channel per user per day (anti-flood)
     USERBOT_MAX_CHANNEL_NOTIFS_PER_DAY: int = 5
+    # Max notifications per group per user per day (anti-flood)
+    USERBOT_MAX_GROUP_NOTIFS_PER_DAY: int = 5
     # Safety cap for active Telethon clients in one process.
     USERBOT_MAX_ACTIVE_CLIENTS: int = 100
     # Pending reply approval timeout in seconds (after this, buttons expire)

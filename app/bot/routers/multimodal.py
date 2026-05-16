@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import html
 import os
 import tempfile
 from aiogram import Router, F
@@ -77,7 +78,7 @@ async def handle_voice(message: Message, session):
                 await message.answer("Извини, Я поняла это. Попытайся снова?")
                 return
             
-            await message.answer(f"💬 Ты сказал: <i>{transcript}</i>")
+            await message.answer(f"💬 Ты сказал: <i>{html.escape(transcript)}</i>")
             
             # Retrieve conversation history
             history = await ConversationHistoryService.get_history(user.tg_chat_id)
@@ -141,7 +142,7 @@ async def handle_photo(message: Message, session):
             await message.bot.download_file(file.file_path, tmp.name)
             caption = message.caption or "Что на этом изображении?"
             analysis = await analyze_photo(tmp.name, caption)
-            await message.answer(f"🖼 <b>Анализ:</b>\n{analysis}")
+            await message.answer(f"🖼 <b>Анализ:</b>\n{html.escape(analysis)}")
     
     except Exception as e:
         logger.exception("Photo processing failed: {}", e)
