@@ -619,11 +619,39 @@ async def cmd_connect_userbot(message: Message, state: FSMContext, session, bot:
 
     if existing:
         client = UserBotManager.get_client(user.id)
-        status = "🟢 connected and monitoring" if client else "🔴 session saved but client not running"
-        await message.answer(
-            f"Your personal Telegram account is already linked ({status}).\n\n"
-            f"Use /disconnect_userbot to remove the connection.",
-        )
+        is_alive = False
+        if client:
+            try:
+                is_alive = await client.is_connected()
+            except Exception:
+                pass
+
+        if is_alive:
+            await message.answer(
+                "Your personal Telegram account is already linked (🟢 connected and monitoring).\n\n"
+                "Use /disconnect_userbot to remove the connection.",
+            )
+            return
+
+        restart_msg = await message.answer("🔴 Session saved but client not running. Restarting…")
+        await UserBotManager.stop_client(user.id)
+        await UserBotManager.start_client(user.id, existing.session_string or "", bot)
+
+        restarted = UserBotManager.get_client(user.id)
+        restarted_alive = False
+        if restarted:
+            try:
+                restarted_alive = await restarted.is_connected()
+            except Exception:
+                pass
+
+        if restarted_alive:
+            await restart_msg.edit_text("✅ Userbot restarted and monitoring.")
+        else:
+            await restart_msg.edit_text(
+                "❌ Failed to restart the userbot.\n"
+                "Try /disconnect_userbot first, then /connect_userbot again."
+            )
         return
 
     old = UserBotManager.get_pending(user.id)

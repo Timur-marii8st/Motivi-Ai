@@ -95,9 +95,24 @@ class UserBotManager:
         Connect a Telethon client from an existing StringSession and register
         event handlers.  If the session is expired/invalid the DB record is
         deactivated and nothing is added to ``_clients``.
+
+        If a client already exists for this user but is disconnected, it is
+        cleaned up and replaced.
         """
         from .userbot_monitor import setup_handlers
-        if user_id not in _clients and len(_clients) >= app_settings.USERBOT_MAX_ACTIVE_CLIENTS:
+
+        existing = _clients.get(user_id)
+        if existing is not None:
+            try:
+                if await existing.is_connected():
+                    logger.info("Userbot client for user {} is already connected", user_id)
+                    return
+            except Exception:
+                pass
+            logger.warning("Userbot client for user {} is disconnected; restarting", user_id)
+            await UserBotManager.stop_client(user_id)
+
+        if len(_clients) >= app_settings.USERBOT_MAX_ACTIVE_CLIENTS:
             logger.warning(
                 "Userbot active client cap reached (%s). Skipping user %s",
                 app_settings.USERBOT_MAX_ACTIVE_CLIENTS,

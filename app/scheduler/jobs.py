@@ -416,6 +416,61 @@ async def memory_decay_warning_job():
         await session.close()
 
 
+async def userbot_health_check_job():
+    """Restart disconnected userbot clients automatically."""
+    from ..services.userbot_manager import UserBotManager
+    from ..db import get_session
+    from ..models.userbot_session import UserBotSession
+    from sqlmodel import select
+
+    bot = get_bot_instance()
+    try:
+        async with get_session() as session:
+            result = await session.execute(
+                select(UserBotSession).where(UserBotSession.is_active == True)  # noqa: E712
+            )
+            rows = result.scalars().all()
+            # Extract plain data while session is still open to avoid detached-instance issues
+            sessions_data = [
+                {"user_id": row.user_id, "session_string": row.session_string or ""}
+                for row in rows
+            ]
+
+        restarted = 0
+        for data in sessions_data:
+            user_id = data["user_id"]
+            session_string = data["session_string"]
+            client = UserBotManager.get_client(user_id)
+            is_connected = False
+            if client:
+                try:
+                    is_connected = await client.is_connected()
+                except Exception:
+                    pass
+
+            if not is_connected:
+                logger.warning(
+                    "Userbot health check: user {} client is down, restarting", user_id
+                )
+                await UserBotManager.stop_client(user_id)
+                try:
+                    await UserBotManager.start_client(
+                        user_id=user_id,
+                        session_string=session_string,
+                        bot=bot,
+                    )
+                    restarted += 1
+                except Exception as exc:
+                    logger.error(
+                        "Userbot health check: failed to restart user {}: {}", user_id, exc
+                    )
+
+        if restarted:
+            logger.info("Userbot health check: restarted {} client(s)", restarted)
+    except Exception as exc:
+        logger.exception("Error in userbot_health_check_job: {}", exc)
+
+
 async def archive_raw_conversations_job():
     """Archive raw conversation history from Redis to Episodes."""
     logger.info("Running archive_raw_conversations_job")

@@ -206,6 +206,14 @@ class JobManager:
             app_settings.USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES,
         )
 
+        scheduler.add_job(
+            func="app.scheduler.jobs:userbot_health_check_job",
+            trigger=IntervalTrigger(minutes=10, timezone=timezone.utc),
+            id="userbot_health_check",
+            replace_existing=True,
+        )
+        logger.info("Scheduled userbot health check every 10 minute(s)")
+
     @staticmethod
     async def schedule_user_triggers(session: AsyncSession, user: User):
         """Schedule or reschedule all active custom triggers for a user."""
