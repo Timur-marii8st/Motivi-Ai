@@ -102,6 +102,10 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
             assistant_bot_id=await resolve_assistant_bot_id(),
         )
 
+    @client.on(events.MessageRead(inbox=True))
+    async def on_message_read(event):
+        await _handle_message_read(event, user_id)
+
 
 # ---------------------------------------------------------------------------
 # Channel post handler
@@ -114,6 +118,53 @@ def _is_break_mode_active(user_settings) -> bool:
     if until and until.tzinfo is None:
         until = until.replace(tzinfo=timezone.utc)
     return not until or until > datetime.now(timezone.utc)
+
+
+async def _handle_message_read(event, user_id: int) -> None:
+    """Track inbox read events so we can skip already-read messages."""
+    try:
+        chat_id = getattr(event, "chat_id", None)
+        max_read = getattr(event, "max_id", None) or getattr(event, "max_read", None)
+        if not chat_id or not max_read:
+            return
+        redis = await _get_redis()
+        try:
+            await redis.setex(
+                f"ub_read:{user_id}:{chat_id}",
+                3600,
+                str(max_read),
+            )
+        finally:
+            await redis.aclose()
+    except Exception as exc:
+        logger.debug("MessageRead handler error (user {}): {}", user_id, exc)
+
+
+async def _check_if_message_read(
+    client: TelegramClient,
+    user_id: int,
+    chat_id: int,
+    message_id: int,
+) -> bool:
+    """Return True if the message has already been read by the user."""
+    # 1. Fast path: Redis cache from live MessageRead events
+    redis = await _get_redis()
+    try:
+        cached_max = await redis.get(f"ub_read:{user_id}:{chat_id}")
+        if cached_max and int(cached_max) >= message_id:
+            return True
+    finally:
+        await redis.aclose()
+
+    # 2. Fallback: ask Telethon for the current dialog read cursor
+    try:
+        dialog = await client.get_dialog(chat_id)
+        if dialog and getattr(dialog, "read_inbox_max_id", 0) >= message_id:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
@@ -293,16 +344,53 @@ async def _handle_dm(
     *,
     assistant_bot_id: int | None = None,
 ) -> None:
+    """Fast path: enqueue delayed processing so we can skip already-read messages."""
     try:
         if _is_outgoing_event(event) or _should_ignore_assistant_bot_event(
             event, assistant_bot_id
         ):
             return
 
+        text: str = event.message.message or ""
+        if not text.strip():
+            return
+
+        asyncio.create_task(
+            _process_dm_delayed(
+                event=event,
+                user_id=user_id,
+                bot=bot,
+                client=client,
+                assistant_bot_id=assistant_bot_id,
+            )
+        )
+    except Exception as exc:
+        logger.error("Userbot DM handler error (user {}): {}", user_id, exc)
+
+
+async def _process_dm_delayed(
+    event,
+    user_id: int,
+    bot: "Bot",
+    client: TelegramClient,
+    *,
+    assistant_bot_id: int | None = None,
+) -> None:
+    """Wait a bit, then process the DM only if the user hasn't read it yet."""
+    try:
+        await asyncio.sleep(app_settings.USERBOT_READ_CHECK_DELAY_SECONDS)
+
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_dm_notifications:
             return
         if user_settings and _is_break_mode_active(user_settings):
+            return
+
+        if await _check_if_message_read(client, user_id, event.chat_id, event.message.id):
+            logger.info(
+                "Userbot: skipping DM for user {} - message {} already read",
+                user_id, event.message.id,
+            )
             return
 
         text: str = event.message.message or ""
@@ -462,7 +550,7 @@ async def _handle_dm(
             "Userbot: sent DM notification to user {} from {}", user_id, sender_name
         )
     except Exception as exc:
-        logger.error("Userbot DM handler error (user {}): {}", user_id, exc)
+        logger.error("Userbot delayed DM handler error (user {}): {}", user_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -478,19 +566,13 @@ async def _handle_group_message(
     assistant_bot_id: int | None = None,
 ) -> None:
     """
-    Handle incoming group/supergroup messages.
-    Only react to messages that mention the user or reply to the user's messages.
+    Fast path: filter then enqueue delayed processing so we can skip
+    already-read messages.
     """
     try:
         if _is_outgoing_event(event) or _should_ignore_assistant_bot_event(
             event, assistant_bot_id
         ):
-            return
-
-        user_settings = await _get_user_settings(user_id)
-        if user_settings and not user_settings.enable_group_monitoring:
-            return
-        if user_settings and _is_break_mode_active(user_settings):
             return
 
         text: str = event.message.message or ""
@@ -507,11 +589,6 @@ async def _handle_group_message(
         sender = await event.get_sender()
         if _is_telegram_bot_sender(sender):
             return
-
-        first = getattr(sender, "first_name", None) or ""
-        last = getattr(sender, "last_name", None) or ""
-        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
-        sender_tg_id = getattr(sender, "id", 0)
 
         is_reply_to_me = False
         if event.message.reply_to:
@@ -549,6 +626,62 @@ async def _handle_group_message(
                 return
         finally:
             await redis.aclose()
+
+        asyncio.create_task(
+            _process_group_delayed(
+                event=event,
+                user_id=user_id,
+                bot=bot,
+                client=client,
+                assistant_bot_id=assistant_bot_id,
+                is_reply_to_me=is_reply_to_me,
+                sender=sender,
+            )
+        )
+    except Exception as exc:
+        logger.error("Userbot group handler error (user {}): {}", user_id, exc)
+
+
+async def _process_group_delayed(
+    event,
+    user_id: int,
+    bot: "Bot",
+    client: TelegramClient,
+    *,
+    assistant_bot_id: int | None = None,
+    is_reply_to_me: bool = False,
+    sender=None,
+) -> None:
+    """Wait a bit, then process the group message only if not already read."""
+    try:
+        await asyncio.sleep(app_settings.USERBOT_READ_CHECK_DELAY_SECONDS)
+
+        user_settings = await _get_user_settings(user_id)
+        if user_settings and not user_settings.enable_group_monitoring:
+            return
+        if user_settings and _is_break_mode_active(user_settings):
+            return
+
+        if await _check_if_message_read(client, user_id, event.chat_id, event.message.id):
+            logger.info(
+                "Userbot: skipping group msg for user {} - message {} already read",
+                user_id, event.message.id,
+            )
+            return
+
+        text: str = event.message.message or ""
+        if not text.strip():
+            return
+
+        if sender is None:
+            sender = await event.get_sender()
+        if _is_telegram_bot_sender(sender):
+            return
+
+        first = getattr(sender, "first_name", None) or ""
+        last = getattr(sender, "last_name", None) or ""
+        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        sender_tg_id = getattr(sender, "id", 0)
 
         chat = await event.get_chat()
         chat_title = getattr(chat, "title", None) or f"group {event.chat_id}"
@@ -691,7 +824,7 @@ async def _handle_group_message(
             user_id, sender_name, chat_title,
         )
     except Exception as exc:
-        logger.error("Userbot group handler error (user {}): {}", user_id, exc)
+        logger.error("Userbot delayed group handler error (user {}): {}", user_id, exc)
 
 
 # ---------------------------------------------------------------------------

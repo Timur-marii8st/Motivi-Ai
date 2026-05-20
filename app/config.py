@@ -148,6 +148,9 @@ class Settings(BaseSettings):
     USERBOT_ACTION_TARGET_DIALOG_LIMIT: int = 20
     # Hard cap for action-plan steps shown in one notification.
     USERBOT_ACTION_PLAN_MAX_STEPS: int = 5
+    # Delay before processing DM/group messages to avoid suggesting replies
+    # for messages the user has already read.
+    USERBOT_READ_CHECK_DELAY_SECONDS: int = 45
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".
