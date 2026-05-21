@@ -291,6 +291,24 @@ class UserBotThreadService:
         )
         return list(result.scalars().all())
 
+    async def _is_thread_message_read(
+        self, user_id: int, chat_id: int, message_id: int
+    ) -> bool:
+        """Check Redis whether the user has already read this message."""
+        try:
+            from redis.asyncio import Redis
+
+            redis = Redis.from_url(app_settings.REDIS_URL)
+            try:
+                cached_max = await redis.get(f"ub_read:{user_id}:{chat_id}")
+                if cached_max and int(cached_max) >= message_id:
+                    return True
+            finally:
+                await redis.aclose()
+        except Exception as exc:
+            logger.debug("Failed to check read status for follow-up: {}", exc)
+        return False
+
     async def send_due_followups(
         self,
         session: AsyncSession,
@@ -311,6 +329,21 @@ class UserBotThreadService:
             if user_settings and not getattr(
                 user_settings, "enable_userbot_followups", True
             ):
+                continue
+
+            # Skip follow-up if the user has already read the original message
+            if await self._is_thread_message_read(
+                thread.user_id, thread.chat_id, thread.message_id
+            ):
+                logger.info(
+                    "Userbot: skipping follow-up for user {} - message {} already read",
+                    thread.user_id, thread.message_id,
+                )
+                # Mark as closed so we don't keep checking it
+                thread.status = "closed"
+                if hasattr(thread, "updated_at"):
+                    thread.updated_at = datetime.now(timezone.utc)
+                session.add(thread)
                 continue
 
             suggestions = _as_list(thread.suggested_replies_json)[:3]
