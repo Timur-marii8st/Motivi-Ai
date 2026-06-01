@@ -120,6 +120,74 @@ def test_action_plan_keyboard_excludes_completed_steps():
     assert "ub_plan_step:abc123:2" not in callback_data
 
 
+def test_reply_batch_text_groups_multiple_messages():
+    text = userbot_monitor._batch_message_text(
+        [
+            {"message_id": 10, "text": "first thought"},
+            {"message_id": 11, "text": "and one more detail"},
+        ]
+    )
+
+    assert text == "1. first thought\n2. and one more detail"
+    assert userbot_monitor._latest_batch_message_id(
+        [{"message_id": 10}, {"message_id": 11}],
+        fallback=9,
+    ) == 11
+
+
+def test_auto_reminder_steps_are_hidden_after_execution(monkeypatch):
+    calls = []
+
+    async def fake_run_auto_reminder_step(**kwargs):
+        calls.append(kwargs["step"])
+        return True, "reminder_1_abc"
+
+    monkeypatch.setattr(
+        userbot_monitor,
+        "_run_auto_reminder_step",
+        fake_run_auto_reminder_step,
+    )
+    reminder_step = {
+        "type": "create_reminder",
+        "message_text": "Ask Alex about the invoice",
+        "reminder_datetime_iso": "2026-06-02T10:00:00+03:00",
+        "status": "pending",
+    }
+    contact_step = {
+        "type": "send_message_to_contact",
+        "text": "Please confirm the invoice.",
+        "status": "pending",
+    }
+
+    visible_plan = asyncio.run(
+        userbot_monitor._auto_run_and_hide_reminder_steps(
+            user_id=1,
+            source_chat_id=100,
+            sender_tg_id=200,
+            owner_tg_chat_id=300,
+            action_plan={"steps": [reminder_step, contact_step]},
+            bot=_Bot(),
+        )
+    )
+
+    assert calls == [reminder_step]
+    assert reminder_step["status"] == "done"
+    assert reminder_step["job_id"] == "reminder_1_abc"
+    assert visible_plan == {"steps": [contact_step]}
+
+    reminder_only_plan = asyncio.run(
+        userbot_monitor._auto_run_and_hide_reminder_steps(
+            user_id=1,
+            source_chat_id=100,
+            sender_tg_id=200,
+            owner_tg_chat_id=300,
+            action_plan={"steps": [reminder_step]},
+            bot=_Bot(),
+        )
+    )
+    assert reminder_only_plan is None
+
+
 def test_contact_action_step_sends_only_after_callback(monkeypatch):
     monkeypatch.setattr(
         userbot_router,

@@ -355,30 +355,63 @@ async def _handle_dm(
         if not text.strip():
             return
 
+        sender = await event.get_sender()
+        if _is_telegram_bot_sender(sender):
+            return
+
+        sender_tg_id = (
+            _coerce_int(getattr(sender, "id", None))
+            or _event_sender_id(event)
+            or _event_chat_id(event)
+            or 0
+        )
+        batch_key, batch_version = await _enqueue_reply_batch_message(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            sender_tg_id=sender_tg_id,
+            chat_type="dm",
+            message_id=event.message.id,
+            text=text,
+        )
         asyncio.create_task(
-            _process_dm_delayed(
+            _process_dm_debounced(
                 event=event,
                 user_id=user_id,
                 bot=bot,
                 client=client,
                 assistant_bot_id=assistant_bot_id,
+                sender=sender,
+                sender_tg_id=sender_tg_id,
+                batch_key=batch_key,
+                expected_batch_version=batch_version,
             )
         )
     except Exception as exc:
         logger.error("Userbot DM handler error (user {}): {}", user_id, exc)
 
 
-async def _process_dm_delayed(
+async def _process_dm_debounced(
     event,
     user_id: int,
     bot: "Bot",
     client: TelegramClient,
     *,
     assistant_bot_id: int | None = None,
+    sender=None,
+    sender_tg_id: int = 0,
+    batch_key: str,
+    expected_batch_version: int,
 ) -> None:
-    """Wait a bit, then process the DM only if the user hasn't read it yet."""
+    """Wait for a quiet window, then process the DM batch if it is still current."""
     try:
-        await asyncio.sleep(app_settings.USERBOT_READ_CHECK_DELAY_SECONDS)
+        await asyncio.sleep(_reply_batch_delay_seconds())
+
+        batch_messages = await _drain_reply_batch_if_current(
+            batch_key=batch_key,
+            expected_version=expected_batch_version,
+        )
+        if batch_messages is None:
+            return
 
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_dm_notifications:
@@ -386,25 +419,29 @@ async def _process_dm_delayed(
         if user_settings and _is_break_mode_active(user_settings):
             return
 
-        if await _check_if_message_read(client, user_id, event.chat_id, event.message.id):
+        latest_message_id = _latest_batch_message_id(batch_messages, event.message.id)
+        if await _check_if_message_read(client, user_id, event.chat_id, latest_message_id):
             logger.info(
                 "Userbot: skipping DM for user {} - message {} already read",
-                user_id, event.message.id,
+                user_id, latest_message_id,
             )
             return
 
-        text: str = event.message.message or ""
+        text = _batch_message_text(batch_messages)
+        if not text:
+            text = event.message.message or ""
         if not text.strip():
             return
 
-        sender = await event.get_sender()
+        if sender is None:
+            sender = await event.get_sender()
         if _is_telegram_bot_sender(sender):
             return
 
         first = getattr(sender, "first_name", None) or ""
         last = getattr(sender, "last_name", None) or ""
         sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
-        sender_tg_id = getattr(sender, "id", 0)
+        sender_tg_id = sender_tg_id or getattr(sender, "id", 0)
 
         # Gather context in parallel for high-quality reply suggestions
         thread_coro = _fetch_conversation_thread(client, event.chat_id)
@@ -452,7 +489,7 @@ async def _process_dm_delayed(
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
             chat_id=event.chat_id,
-            message_id=event.message.id,
+            message_id=latest_message_id,
             sender_name=sender_name,
             sender_tg_id=sender_tg_id,
             chat_type="dm",
@@ -482,9 +519,21 @@ async def _process_dm_delayed(
                 target_candidates=target_candidates,
             )
 
-        preview = text[:400].strip()
-        if len(text) > 400:
-            preview += "…"
+        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
+        if not tg_id:
+            return
+
+        if action_plan:
+            action_plan = await _auto_run_and_hide_reminder_steps(
+                user_id=user_id,
+                source_chat_id=event.chat_id,
+                sender_tg_id=sender_tg_id,
+                owner_tg_chat_id=tg_id,
+                action_plan=action_plan,
+                bot=bot,
+            )
+
+        preview = _batch_preview(batch_messages, fallback=text)
 
         notification = (
             f"💬 <b>New message from {_esc(sender_name)}:</b>\n"
@@ -501,16 +550,12 @@ async def _process_dm_delayed(
         # Determine if we show approval buttons
         show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
 
-        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
-        if not tg_id:
-            return
-
         if show_buttons:
             # Store pending reply in Redis
             pending_key = await _store_pending_reply(
                 user_id=user_id,
                 chat_id=event.chat_id,
-                message_id=event.message.id,
+                message_id=latest_message_id,
                 sender_name=sender_name,
                 sender_tg_id=sender_tg_id,
                 chat_type="dm",
@@ -522,7 +567,7 @@ async def _process_dm_delayed(
                 action_plan["reply_pending_key"] = pending_key
                 action_plan["thread_id"] = thread_id
                 action_plan["source_chat_id"] = event.chat_id
-                action_plan["source_message_id"] = event.message.id
+                action_plan["source_message_id"] = latest_message_id
                 action_plan["suggestions"] = suggestions
                 action_plan["owner_tg_chat_id"] = tg_id
                 action_plan["notification_text"] = notification
@@ -612,23 +657,21 @@ async def _handle_group_message(
         if not is_reply_to_me and not is_mention:
             return
 
-        # Rate limit group notifications
-        today_str = date.today().isoformat()
-        rate_key = f"userbot_group_notif:{user_id}:{event.chat_id}:{today_str}"
-        redis = await _get_redis()
-        try:
-            async with redis.pipeline(transaction=True) as pipe:
-                pipe.incr(rate_key)
-                pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
-                pipe_result = await pipe.execute()
-            count = int(pipe_result[0])
-            if count > app_settings.USERBOT_MAX_GROUP_NOTIFS_PER_DAY:
-                return
-        finally:
-            await redis.aclose()
-
+        sender_tg_id = (
+            _coerce_int(getattr(sender, "id", None))
+            or _event_sender_id(event)
+            or 0
+        )
+        batch_key, batch_version = await _enqueue_reply_batch_message(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            sender_tg_id=sender_tg_id,
+            chat_type="group",
+            message_id=event.message.id,
+            text=text,
+        )
         asyncio.create_task(
-            _process_group_delayed(
+            _process_group_debounced(
                 event=event,
                 user_id=user_id,
                 bot=bot,
@@ -636,13 +679,16 @@ async def _handle_group_message(
                 assistant_bot_id=assistant_bot_id,
                 is_reply_to_me=is_reply_to_me,
                 sender=sender,
+                sender_tg_id=sender_tg_id,
+                batch_key=batch_key,
+                expected_batch_version=batch_version,
             )
         )
     except Exception as exc:
         logger.error("Userbot group handler error (user {}): {}", user_id, exc)
 
 
-async def _process_group_delayed(
+async def _process_group_debounced(
     event,
     user_id: int,
     bot: "Bot",
@@ -651,10 +697,20 @@ async def _process_group_delayed(
     assistant_bot_id: int | None = None,
     is_reply_to_me: bool = False,
     sender=None,
+    sender_tg_id: int = 0,
+    batch_key: str,
+    expected_batch_version: int,
 ) -> None:
-    """Wait a bit, then process the group message only if not already read."""
+    """Wait for a quiet window, then process the group message batch if current."""
     try:
-        await asyncio.sleep(app_settings.USERBOT_READ_CHECK_DELAY_SECONDS)
+        await asyncio.sleep(_reply_batch_delay_seconds())
+
+        batch_messages = await _drain_reply_batch_if_current(
+            batch_key=batch_key,
+            expected_version=expected_batch_version,
+        )
+        if batch_messages is None:
+            return
 
         user_settings = await _get_user_settings(user_id)
         if user_settings and not user_settings.enable_group_monitoring:
@@ -662,14 +718,20 @@ async def _process_group_delayed(
         if user_settings and _is_break_mode_active(user_settings):
             return
 
-        if await _check_if_message_read(client, user_id, event.chat_id, event.message.id):
+        latest_message_id = _latest_batch_message_id(batch_messages, event.message.id)
+        if await _check_if_message_read(client, user_id, event.chat_id, latest_message_id):
             logger.info(
                 "Userbot: skipping group msg for user {} - message {} already read",
-                user_id, event.message.id,
+                user_id, latest_message_id,
             )
             return
 
-        text: str = event.message.message or ""
+        if not await _check_group_notification_rate_limit(user_id, event.chat_id):
+            return
+
+        text = _batch_message_text(batch_messages)
+        if not text:
+            text = event.message.message or ""
         if not text.strip():
             return
 
@@ -681,7 +743,7 @@ async def _process_group_delayed(
         first = getattr(sender, "first_name", None) or ""
         last = getattr(sender, "last_name", None) or ""
         sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
-        sender_tg_id = getattr(sender, "id", 0)
+        sender_tg_id = sender_tg_id or getattr(sender, "id", 0)
 
         chat = await event.get_chat()
         chat_title = getattr(chat, "title", None) or f"group {event.chat_id}"
@@ -727,7 +789,7 @@ async def _process_group_delayed(
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
             chat_id=event.chat_id,
-            message_id=event.message.id,
+            message_id=latest_message_id,
             sender_name=sender_name,
             sender_tg_id=sender_tg_id,
             chat_type="group",
@@ -757,9 +819,21 @@ async def _process_group_delayed(
                 target_candidates=target_candidates,
             )
 
-        preview = text[:400].strip()
-        if len(text) > 400:
-            preview += "…"
+        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
+        if not tg_id:
+            return
+
+        if action_plan:
+            action_plan = await _auto_run_and_hide_reminder_steps(
+                user_id=user_id,
+                source_chat_id=event.chat_id,
+                sender_tg_id=sender_tg_id,
+                owner_tg_chat_id=tg_id,
+                action_plan=action_plan,
+                bot=bot,
+            )
+
+        preview = _batch_preview(batch_messages, fallback=text)
 
         trigger = "replied to you" if is_reply_to_me else "mentioned you"
         notification = (
@@ -774,17 +848,13 @@ async def _process_group_delayed(
         if action_plan:
             notification += _format_action_plan_for_notification(action_plan)
 
-        tg_id, topic_kwargs = await _get_tg_delivery(user_id)
-        if not tg_id:
-            return
-
         show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
 
         if show_buttons:
             pending_key = await _store_pending_reply(
                 user_id=user_id,
                 chat_id=event.chat_id,
-                message_id=event.message.id,
+                message_id=latest_message_id,
                 sender_name=sender_name,
                 sender_tg_id=sender_tg_id,
                 chat_type="group",
@@ -796,7 +866,7 @@ async def _process_group_delayed(
                 action_plan["reply_pending_key"] = pending_key
                 action_plan["thread_id"] = thread_id
                 action_plan["source_chat_id"] = event.chat_id
-                action_plan["source_message_id"] = event.message.id
+                action_plan["source_message_id"] = latest_message_id
                 action_plan["suggestions"] = suggestions
                 action_plan["owner_tg_chat_id"] = tg_id
                 action_plan["notification_text"] = notification
@@ -909,6 +979,159 @@ def build_userbot_approval_keyboard(
 
 def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKeyboardMarkup:
     return build_userbot_approval_keyboard(pending_key, num_suggestions)
+
+
+# ---------------------------------------------------------------------------
+# Reply burst batching
+# ---------------------------------------------------------------------------
+
+def _reply_batch_delay_seconds() -> float:
+    return float(
+        max(
+            1,
+            app_settings.USERBOT_READ_CHECK_DELAY_SECONDS,
+            app_settings.USERBOT_REPLY_DEBOUNCE_SECONDS,
+        )
+    )
+
+
+def _reply_batch_key(
+    *,
+    user_id: int,
+    chat_id: int,
+    sender_tg_id: int,
+    chat_type: str,
+) -> str:
+    return f"ub_reply_batch:{user_id}:{chat_type}:{chat_id}:{sender_tg_id}"
+
+
+def _reply_batch_version_key(batch_key: str) -> str:
+    return f"{batch_key}:version"
+
+
+async def _enqueue_reply_batch_message(
+    *,
+    user_id: int,
+    chat_id: int,
+    sender_tg_id: int,
+    chat_type: str,
+    message_id: int,
+    text: str,
+) -> tuple[str, int]:
+    batch_key = _reply_batch_key(
+        user_id=user_id,
+        chat_id=chat_id,
+        sender_tg_id=sender_tg_id,
+        chat_type=chat_type,
+    )
+    version_key = _reply_batch_version_key(batch_key)
+    entry = json.dumps(
+        {
+            "message_id": message_id,
+            "text": text[:1200],
+            "ts": int(time.time()),
+        },
+        ensure_ascii=False,
+    )
+    redis = await _get_redis()
+    try:
+        ttl_seconds = max(
+            app_settings.USERBOT_REPLY_TIMEOUT,
+            int(_reply_batch_delay_seconds()) + 60,
+        )
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.rpush(batch_key, entry)
+            pipe.expire(batch_key, ttl_seconds)
+            pipe.incr(version_key)
+            pipe.expire(version_key, ttl_seconds)
+            result = await pipe.execute()
+        return batch_key, int(result[2])
+    finally:
+        await redis.aclose()
+
+
+async def _drain_reply_batch_if_current(
+    *,
+    batch_key: str,
+    expected_version: int,
+) -> list[dict] | None:
+    version_key = _reply_batch_version_key(batch_key)
+    script = """
+    if redis.call('GET', KEYS[2]) == ARGV[1] then
+        local items = redis.call('LRANGE', KEYS[1], 0, -1)
+        redis.call('DEL', KEYS[1], KEYS[2])
+        return items
+    end
+    return nil
+    """
+    redis = await _get_redis()
+    try:
+        raw_items = await redis.eval(script, 2, batch_key, version_key, str(expected_version))
+    finally:
+        await redis.aclose()
+
+    if raw_items is None:
+        return None
+
+    messages: list[dict] = []
+    for raw in raw_items:
+        try:
+            item = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        messages.append(
+            {
+                "message_id": _coerce_int(item.get("message_id")) or 0,
+                "text": text,
+                "ts": _coerce_int(item.get("ts")) or 0,
+            }
+        )
+    return messages
+
+
+def _latest_batch_message_id(messages: list[dict], fallback: int) -> int:
+    message_ids = [
+        message_id
+        for message in messages
+        if (message_id := _coerce_int(message.get("message_id"))) is not None
+    ]
+    return max(message_ids) if message_ids else fallback
+
+
+def _batch_message_text(messages: list[dict]) -> str:
+    texts = [str(item.get("text") or "").strip() for item in messages]
+    texts = [text for text in texts if text]
+    if not texts:
+        return ""
+    if len(texts) == 1:
+        return texts[0]
+    return "\n".join(f"{index}. {text}" for index, text in enumerate(texts, 1))
+
+
+def _batch_preview(messages: list[dict], *, fallback: str, limit: int = 400) -> str:
+    text = _batch_message_text(messages) or fallback
+    compact = _short_summary(text, limit)
+    if len(messages) > 1:
+        return f"{len(messages)} messages:\n{compact}"
+    return compact
+
+
+async def _check_group_notification_rate_limit(user_id: int, chat_id: int) -> bool:
+    today_str = date.today().isoformat()
+    rate_key = f"userbot_group_notif:{user_id}:{chat_id}:{today_str}"
+    redis = await _get_redis()
+    try:
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.incr(rate_key)
+            pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
+            pipe_result = await pipe.execute()
+        count = int(pipe_result[0])
+        return count <= app_settings.USERBOT_MAX_GROUP_NOTIFS_PER_DAY
+    finally:
+        await redis.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -1643,6 +1866,168 @@ def _action_step_is_executable(step: dict) -> bool:
 
 def _action_step_is_editable(step: dict) -> bool:
     return step.get("type") in {"reply_to_sender", "send_message_to_contact"}
+
+
+async def _auto_run_and_hide_reminder_steps(
+    *,
+    user_id: int,
+    source_chat_id: int,
+    sender_tg_id: int,
+    owner_tg_chat_id: int,
+    action_plan: dict,
+    bot: "Bot",
+) -> dict | None:
+    """
+    Execute reminder steps silently and remove them from the user-visible plan.
+    Sending messages to people still requires explicit approval elsewhere.
+    """
+    steps = action_plan.get("steps")
+    if not isinstance(steps, list):
+        return action_plan
+
+    visible_steps: list[dict] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if step.get("type") != "create_reminder":
+            visible_steps.append(step)
+            continue
+
+        if step.get("status") != "done":
+            ok, job_id_or_error = await _run_auto_reminder_step(
+                user_id=user_id,
+                source_chat_id=source_chat_id,
+                sender_tg_id=sender_tg_id,
+                owner_tg_chat_id=owner_tg_chat_id,
+                step=step,
+                bot=bot,
+            )
+            if ok:
+                step["status"] = "done"
+                step["job_id"] = job_id_or_error
+            else:
+                step["status"] = "failed"
+                step["error"] = job_id_or_error
+
+    if not visible_steps:
+        return None
+
+    return {**action_plan, "steps": visible_steps}
+
+
+async def _run_auto_reminder_step(
+    *,
+    user_id: int,
+    source_chat_id: int,
+    sender_tg_id: int,
+    owner_tg_chat_id: int,
+    step: dict,
+    bot: "Bot",
+) -> tuple[bool, str]:
+    message_text = (step.get("message_text") or "").strip()
+    reminder_datetime_iso = (step.get("reminder_datetime_iso") or "").strip()
+    if not message_text or not reminder_datetime_iso:
+        return False, "Reminder step is missing required data."
+
+    try:
+        from ..db import get_session
+        from .tool_executor import ToolExecutor
+
+        async with get_session() as session:
+            executor = ToolExecutor(session=session, bot=bot)
+            existing_job_id = await _get_auto_reminder_job_id(
+                user_id=user_id,
+                source_chat_id=source_chat_id,
+                sender_tg_id=sender_tg_id,
+                message_text=message_text,
+            )
+            if existing_job_id:
+                await executor._cancel_reminder({"job_id": existing_job_id}, user_id)
+
+            result = await executor._schedule_reminder(
+                {
+                    "message_text": message_text,
+                    "reminder_datetime_iso": reminder_datetime_iso,
+                },
+                chat_id=owner_tg_chat_id,
+                user_id=user_id,
+            )
+    except Exception as exc:
+        logger.debug("Userbot automatic reminder failed for user {}: {}", user_id, exc)
+        return False, "Failed to create reminder."
+
+    if not result.get("success"):
+        return False, str(result.get("error") or "Failed to create reminder.")
+
+    job_id = str(result.get("job_id") or "")
+    if job_id:
+        await _set_auto_reminder_job_id(
+            user_id=user_id,
+            source_chat_id=source_chat_id,
+            sender_tg_id=sender_tg_id,
+            message_text=message_text,
+            job_id=job_id,
+        )
+    logger.info("Userbot: silently scheduled reminder for user {} (job_id={})", user_id, job_id)
+    return True, job_id
+
+
+def _auto_reminder_key(
+    *,
+    user_id: int,
+    source_chat_id: int,
+    sender_tg_id: int,
+    message_text: str,
+) -> str:
+    normalized = re.sub(r"\s+", " ", message_text).strip().lower()[:200]
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"ub_auto_reminder:{user_id}:{source_chat_id}:{sender_tg_id}:{digest}"
+
+
+async def _get_auto_reminder_job_id(
+    *,
+    user_id: int,
+    source_chat_id: int,
+    sender_tg_id: int,
+    message_text: str,
+) -> str | None:
+    redis = await _get_redis()
+    try:
+        raw = await redis.get(
+            _auto_reminder_key(
+                user_id=user_id,
+                source_chat_id=source_chat_id,
+                sender_tg_id=sender_tg_id,
+                message_text=message_text,
+            )
+        )
+        return raw.decode() if raw else None
+    finally:
+        await redis.aclose()
+
+
+async def _set_auto_reminder_job_id(
+    *,
+    user_id: int,
+    source_chat_id: int,
+    sender_tg_id: int,
+    message_text: str,
+    job_id: str,
+) -> None:
+    redis = await _get_redis()
+    try:
+        await redis.setex(
+            _auto_reminder_key(
+                user_id=user_id,
+                source_chat_id=source_chat_id,
+                sender_tg_id=sender_tg_id,
+                message_text=message_text,
+            ),
+            90 * 86_400,
+            job_id,
+        )
+    finally:
+        await redis.aclose()
 
 
 # ===========================================================================

@@ -151,6 +151,9 @@ class Settings(BaseSettings):
     # Delay before processing DM/group messages to avoid suggesting replies
     # for messages the user has already read.
     USERBOT_READ_CHECK_DELAY_SECONDS: int = 45
+    # Quiet window for grouping bursty DM/group messages from the same sender
+    # before generating one reply suggestion notification.
+    USERBOT_REPLY_DEBOUNCE_SECONDS: int = 45
 
     # ── Feature Flags ─────────────────────────────────────────
     # JSON string or comma-separated "KEY=true,KEY2=false".
