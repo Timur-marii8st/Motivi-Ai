@@ -81,6 +81,22 @@ class UserBotThread(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    notification_chat_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+    )
+    notification_message_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+    )
+    notification_sent_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    pending_key: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True, index=True),
+    )
     last_incoming_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True, index=True),

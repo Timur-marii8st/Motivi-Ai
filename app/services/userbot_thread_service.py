@@ -179,9 +179,42 @@ class UserBotThreadService:
         await self.ingest_memory_if_needed(session, thread)
         return thread
 
-    async def mark_replied_by_outgoing(
-        self, session: AsyncSession, *, user_id: int, chat_id: int
+    async def attach_notification(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+        thread_id: int | None,
+        notification_chat_id: int | None,
+        notification_message_id: int | None,
+        pending_key: str | None = None,
     ) -> bool:
+        if not thread_id or not notification_chat_id or not notification_message_id:
+            return False
+        cls = self._thread_model()
+        thread = await session.get(cls, thread_id)
+        if not thread or thread.user_id != user_id:
+            return False
+        if thread.status not in OPEN_STATUSES:
+            return False
+        now = datetime.now(timezone.utc)
+        thread.notification_chat_id = notification_chat_id
+        thread.notification_message_id = notification_message_id
+        thread.notification_sent_at = now
+        thread.pending_key = pending_key
+        if hasattr(thread, "updated_at"):
+            thread.updated_at = now
+        session.add(thread)
+        return True
+
+    async def clear_notifications_for_read(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+        chat_id: int,
+        max_read_message_id: int,
+    ) -> list[dict[str, Any]]:
         cls = self._thread_model()
         result = await session.execute(
             select(cls)
@@ -189,20 +222,64 @@ class UserBotThreadService:
                 cls.user_id == user_id,
                 cls.chat_id == chat_id,
                 cls.status.in_(OPEN_STATUSES),
+                cls.message_id.is_not(None),
+                cls.message_id <= max_read_message_id,
+                or_(
+                    cls.notification_message_id.is_not(None),
+                    cls.pending_key.is_not(None),
+                ),
             )
             .order_by(cls.last_incoming_at.desc())
-            .limit(1)
+        )
+        targets = []
+        now = datetime.now(timezone.utc)
+        for thread in result.scalars().all():
+            targets.append(_notification_cleanup_target(thread))
+            _clear_notification_fields(thread)
+            if hasattr(thread, "updated_at"):
+                thread.updated_at = now
+            session.add(thread)
+        return targets
+
+    async def mark_replied_by_outgoing(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+        chat_id: int,
+        message_id: int | None = None,
+        chat_type: str | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        cls = self._thread_model()
+        filters = [
+            cls.user_id == user_id,
+            cls.chat_id == chat_id,
+            cls.status.in_(OPEN_STATUSES),
+        ]
+        if reply_to_message_id:
+            filters.append(cls.message_id == reply_to_message_id)
+        elif message_id:
+            filters.append(or_(cls.message_id.is_(None), cls.message_id <= message_id))
+        if chat_type:
+            filters.append(cls.chat_type == chat_type)
+
+        result = await session.execute(
+            select(cls).where(*filters).order_by(cls.last_incoming_at.desc()).limit(1)
         )
         thread = result.scalar_one_or_none()
         if not thread:
-            return False
+            return None
+        cleanup_target = _notification_cleanup_target(thread)
         now = datetime.now(timezone.utc)
         thread.status = "replied"
         thread.last_outgoing_at = now
+        thread.response_deadline_at = None
+        _clear_notification_fields(thread)
         if hasattr(thread, "updated_at"):
             thread.updated_at = now
         session.add(thread)
-        return True
+        return cleanup_target
 
     async def mark_replied(
         self, session: AsyncSession, *, user_id: int, thread_id: int | None
@@ -216,6 +293,8 @@ class UserBotThreadService:
         now = datetime.now(timezone.utc)
         thread.status = "replied"
         thread.last_outgoing_at = now
+        thread.response_deadline_at = None
+        _clear_notification_fields(thread)
         if hasattr(thread, "updated_at"):
             thread.updated_at = now
         session.add(thread)
@@ -257,6 +336,7 @@ class UserBotThreadService:
             return False
         now = datetime.now(timezone.utc)
         thread.status = "dismissed"
+        _clear_notification_fields(thread)
         if hasattr(thread, "updated_at"):
             thread.updated_at = now
         session.add(thread)
@@ -331,24 +411,10 @@ class UserBotThreadService:
             ):
                 continue
 
-            # Skip follow-up if the user has already read the original message
-            if await self._is_thread_message_read(
-                thread.user_id, thread.chat_id, thread.message_id
-            ):
-                logger.info(
-                    "Userbot: skipping follow-up for user {} - message {} already read",
-                    thread.user_id, thread.message_id,
-                )
-                # Mark as closed so we don't keep checking it
-                thread.status = "closed"
-                if hasattr(thread, "updated_at"):
-                    thread.updated_at = datetime.now(timezone.utc)
-                session.add(thread)
-                continue
-
             suggestions = _as_list(thread.suggested_replies_json)[:3]
             text = self._format_followup(thread, suggestions)
             keyboard = None
+            pending_key = None
             if suggestions and (
                 not user_settings
                 or getattr(user_settings, "enable_reply_approval", True)
@@ -373,7 +439,7 @@ class UserBotThreadService:
                 except Exception as exc:
                     logger.debug("Could not attach userbot approval keyboard: {}", exc)
 
-            await bot.send_message(
+            sent_message = await bot.send_message(
                 user.tg_chat_id,
                 text,
                 parse_mode="HTML",
@@ -382,6 +448,10 @@ class UserBotThreadService:
             )
             thread.reminded_at = datetime.now(timezone.utc)
             thread.status = "reminded"
+            thread.notification_chat_id = user.tg_chat_id
+            thread.notification_message_id = getattr(sent_message, "message_id", None)
+            thread.notification_sent_at = thread.reminded_at
+            thread.pending_key = pending_key
             if hasattr(thread, "updated_at"):
                 thread.updated_at = thread.reminded_at
             session.add(thread)
@@ -523,6 +593,22 @@ def _as_list(value: Any) -> list[str]:
         except json.JSONDecodeError:
             return [value]
     return []
+
+
+def _notification_cleanup_target(thread: Any) -> dict[str, Any]:
+    return {
+        "thread_id": getattr(thread, "id", None),
+        "notification_chat_id": getattr(thread, "notification_chat_id", None),
+        "notification_message_id": getattr(thread, "notification_message_id", None),
+        "pending_key": getattr(thread, "pending_key", None),
+    }
+
+
+def _clear_notification_fields(thread: Any) -> None:
+    thread.notification_chat_id = None
+    thread.notification_message_id = None
+    thread.notification_sent_at = None
+    thread.pending_key = None
 
 
 def _rate_key(user_id: int) -> str:

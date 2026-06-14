@@ -26,9 +26,30 @@ class _ScalarResult:
         return self._value
 
 
+class _Scalars:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return self._values
+
+
+class _ListResult:
+    def __init__(self, values):
+        self._values = values
+
+    def scalars(self):
+        return _Scalars(self._values)
+
+
 class _FakeSession:
     def __init__(self, execute_result=None, get_result=None):
-        self.execute = AsyncMock(return_value=_ScalarResult(execute_result))
+        result = (
+            _ListResult(execute_result)
+            if isinstance(execute_result, list)
+            else _ScalarResult(execute_result)
+        )
+        self.execute = AsyncMock(return_value=result)
         self.get = AsyncMock(return_value=get_result)
         self.flush = AsyncMock()
         self.added = []
@@ -82,6 +103,82 @@ def test_mark_replied_closes_only_owned_thread():
     assert result is True
     assert thread.status == "replied"
     assert thread.last_outgoing_at is not None
+    assert session.added == [thread]
+
+
+def test_mark_replied_by_outgoing_returns_notification_cleanup_target():
+    service = UserBotThreadService()
+    thread = UserBotThread(
+        id=42,
+        user_id=1,
+        chat_id=100,
+        status="open",
+        message_id=10,
+        notification_chat_id=300,
+        notification_message_id=400,
+        pending_key="pending-1",
+    )
+    session = _FakeSession(execute_result=thread)
+
+    cleanup = asyncio.run(
+        service.mark_replied_by_outgoing(
+            session,
+            user_id=1,
+            chat_id=100,
+            message_id=11,
+            chat_type="dm",
+        )
+    )
+
+    assert cleanup == {
+        "thread_id": 42,
+        "notification_chat_id": 300,
+        "notification_message_id": 400,
+        "pending_key": "pending-1",
+    }
+    assert thread.status == "replied"
+    assert thread.response_deadline_at is None
+    assert thread.notification_chat_id is None
+    assert thread.notification_message_id is None
+    assert thread.pending_key is None
+    assert session.added == [thread]
+
+
+def test_read_cleanup_clears_notification_but_keeps_thread_open():
+    service = UserBotThreadService()
+    thread = UserBotThread(
+        id=42,
+        user_id=1,
+        chat_id=100,
+        status="open",
+        message_id=10,
+        notification_chat_id=300,
+        notification_message_id=400,
+        pending_key="pending-1",
+    )
+    session = _FakeSession(execute_result=[thread])
+
+    cleanup = asyncio.run(
+        service.clear_notifications_for_read(
+            session,
+            user_id=1,
+            chat_id=100,
+            max_read_message_id=10,
+        )
+    )
+
+    assert cleanup == [
+        {
+            "thread_id": 42,
+            "notification_chat_id": 300,
+            "notification_message_id": 400,
+            "pending_key": "pending-1",
+        }
+    ]
+    assert thread.status == "open"
+    assert thread.notification_chat_id is None
+    assert thread.notification_message_id is None
+    assert thread.pending_key is None
     assert session.added == [thread]
 
 

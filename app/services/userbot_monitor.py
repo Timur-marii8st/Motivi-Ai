@@ -29,6 +29,7 @@ Safety guarantees
 * Rate limiting via Redis prevents notification and reply floods.
 * All pending replies expire after USERBOT_REPLY_TIMEOUT seconds.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
 # Public entry-point
 # ---------------------------------------------------------------------------
 
+
 def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
     """Register all Telethon event handlers for *one* user's client."""
     assistant_bot_id: int | None = None
@@ -66,10 +68,14 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
         try:
             assistant_bot_id = int((await bot.get_me()).id)
         except Exception as exc:
-            logger.debug("Could not resolve aiogram bot id for userbot filters: {}", exc)
+            logger.debug(
+                "Could not resolve aiogram bot id for userbot filters: {}", exc
+            )
         return assistant_bot_id
 
-    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_channel and not e.is_group))
+    @client.on(
+        events.NewMessage(incoming=True, func=lambda e: e.is_channel and not e.is_group)
+    )
     async def on_channel_post(event):
         await _handle_channel_post(event, user_id, bot)
 
@@ -94,22 +100,26 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
         )
 
     # Learn communication style from the user's own outgoing messages
-    @client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private or e.is_group))
+    @client.on(
+        events.NewMessage(outgoing=True, func=lambda e: e.is_private or e.is_group)
+    )
     async def on_outgoing(event):
         await _handle_outgoing_message(
             event,
             user_id,
+            bot=bot,
             assistant_bot_id=await resolve_assistant_bot_id(),
         )
 
     @client.on(events.MessageRead(inbox=True))
     async def on_message_read(event):
-        await _handle_message_read(event, user_id)
+        await _handle_message_read(event, user_id, bot)
 
 
 # ---------------------------------------------------------------------------
 # Channel post handler
 # ---------------------------------------------------------------------------
+
 
 def _is_break_mode_active(user_settings) -> bool:
     if not getattr(user_settings, "break_mode_active", False):
@@ -120,7 +130,7 @@ def _is_break_mode_active(user_settings) -> bool:
     return not until or until > datetime.now(timezone.utc)
 
 
-async def _handle_message_read(event, user_id: int) -> None:
+async def _handle_message_read(event, user_id: int, bot: Bot | None = None) -> None:
     """Track inbox read events so we can skip already-read messages."""
     try:
         chat_id = getattr(event, "chat_id", None)
@@ -136,6 +146,13 @@ async def _handle_message_read(event, user_id: int) -> None:
             )
         finally:
             await redis.aclose()
+        if bot:
+            await _clear_read_thread_notifications(
+                user_id=user_id,
+                chat_id=chat_id,
+                max_read_message_id=int(max_read),
+                bot=bot,
+            )
     except Exception as exc:
         logger.debug("MessageRead handler error (user {}): {}", user_id, exc)
 
@@ -227,9 +244,7 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
 
         post_link = ""
         if channel_username and event.message.id:
-            post_link = (
-                f"https://t.me/{channel_username}/{event.message.id}"
-            )
+            post_link = f"https://t.me/{channel_username}/{event.message.id}"
 
         tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
@@ -258,7 +273,9 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
             )
             logger.info(
                 "Userbot: sent HIGH-priority channel notification to user {} from {} (score={})",
-                user_id, channel_name, score,
+                user_id,
+                channel_name,
+                score,
             )
         else:
             # MEDIUM relevance → accumulate in batch
@@ -282,10 +299,12 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
 # Outgoing message handler — style learning
 # ---------------------------------------------------------------------------
 
+
 async def _handle_outgoing_message(
     event,
     user_id: int,
     *,
+    bot: Bot | None = None,
     assistant_bot_id: int | None = None,
 ) -> None:
     """
@@ -297,36 +316,56 @@ async def _handle_outgoing_message(
         if _is_private_chat_with_telegram_id(event, assistant_bot_id):
             return
 
+        chat_id = _event_chat_id(event)
+        if chat_id is None:
+            return
+
         text: str = event.message.message or ""
-        if not text.strip() or len(text) < 5:
+        if not text.strip():
             return
 
         # Skip bot-sent replies (marked by _send_reply_with_human_simulation)
         redis = await _get_redis()
         try:
-            skip_key = f"ub_skip_outgoing:{user_id}:{event.chat_id}"
+            skip_key = f"ub_skip_outgoing:{user_id}:{chat_id}"
             if await redis.get(skip_key):
                 return
 
-            # Store as style sample: JSON with text and timestamp
-            sample = json.dumps(
-                {"text": text[:500], "ts": int(time.time())},
-                ensure_ascii=False,
-            )
-            list_key = f"ub_style:{user_id}"
-            async with redis.pipeline(transaction=True) as pipe:
-                pipe.lpush(list_key, sample)
-                pipe.ltrim(list_key, 0, app_settings.USERBOT_STYLE_SAMPLES_MAX - 1)
-                await pipe.execute()
+            if len(text) >= 5:
+                # Store as style sample: JSON with text and timestamp
+                sample = json.dumps(
+                    {"text": text[:500], "ts": int(time.time())},
+                    ensure_ascii=False,
+                )
+                list_key = f"ub_style:{user_id}"
+                async with redis.pipeline(transaction=True) as pipe:
+                    pipe.lpush(list_key, sample)
+                    pipe.ltrim(list_key, 0, app_settings.USERBOT_STYLE_SAMPLES_MAX - 1)
+                    await pipe.execute()
         finally:
             await redis.aclose()
 
-        await _mark_latest_thread_replied(
+        message_id = _coerce_int(getattr(event.message, "id", None))
+        await _record_manual_outgoing(
             user_id=user_id,
-            chat_id=event.chat_id,
-            message_id=event.message.id,
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+
+        cleanup_target = await _mark_latest_thread_replied(
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            chat_type="group" if getattr(event, "is_group", False) else "dm",
+            reply_to_message_id=_reply_to_message_id(event),
             reply_text=text,
         )
+        if cleanup_target:
+            await _cleanup_thread_notification(
+                bot=bot,
+                cleanup_target=cleanup_target,
+                reason="manual_reply",
+            )
 
     except Exception as exc:
         logger.debug("Userbot outgoing handler error (user {}): {}", user_id, exc)
@@ -335,6 +374,7 @@ async def _handle_outgoing_message(
 # ---------------------------------------------------------------------------
 # DM handler — with approval buttons
 # ---------------------------------------------------------------------------
+
 
 async def _handle_dm(
     event,
@@ -420,10 +460,26 @@ async def _process_dm_debounced(
             return
 
         latest_message_id = _latest_batch_message_id(batch_messages, event.message.id)
-        if await _check_if_message_read(client, user_id, event.chat_id, latest_message_id):
+        if await _check_if_message_read(
+            client, user_id, event.chat_id, latest_message_id
+        ):
             logger.info(
                 "Userbot: skipping DM for user {} - message {} already read",
-                user_id, latest_message_id,
+                user_id,
+                latest_message_id,
+            )
+            return
+        latest_message_ts = _latest_batch_ts(batch_messages)
+        if await _has_manual_outgoing_after(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=latest_message_id,
+            message_ts=latest_message_ts,
+        ):
+            logger.info(
+                "Userbot: skipping DM for user {} - message {} already answered manually",
+                user_id,
+                latest_message_id,
             )
             return
 
@@ -440,7 +496,9 @@ async def _process_dm_debounced(
 
         first = getattr(sender, "first_name", None) or ""
         last = getattr(sender, "last_name", None) or ""
-        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        sender_name = (
+            f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        )
         sender_tg_id = sender_tg_id or getattr(sender, "id", 0)
 
         # Gather context in parallel for high-quality reply suggestions
@@ -450,7 +508,10 @@ async def _process_dm_debounced(
         relationship_coro = _get_sender_relationship(user_id, sender_tg_id)
 
         thread, facts, style_samples, relationship = await asyncio.gather(
-            thread_coro, facts_coro, style_coro, relationship_coro,
+            thread_coro,
+            facts_coro,
+            style_coro,
+            relationship_coro,
             return_exceptions=True,
         )
         # Gracefully handle failures in context fetching
@@ -464,7 +525,9 @@ async def _process_dm_debounced(
             logger.debug("Style fetch failed for user {}: {}", user_id, style_samples)
             style_samples = []
         if isinstance(relationship, BaseException):
-            logger.debug("Relationship fetch failed for user {}: {}", user_id, relationship)
+            logger.debug(
+                "Relationship fetch failed for user {}: {}", user_id, relationship
+            )
             relationship = None
 
         suggestions = await _generate_reply_suggestions(
@@ -498,6 +561,28 @@ async def _process_dm_debounced(
             classification=classification,
             suggestions=suggestions,
         )
+
+        if await _check_if_message_read(
+            client, user_id, event.chat_id, latest_message_id
+        ):
+            logger.info(
+                "Userbot: skipping DM notification for user {} - message {} was read during processing",
+                user_id,
+                latest_message_id,
+            )
+            return
+        if await _has_manual_outgoing_after(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=latest_message_id,
+            message_ts=latest_message_ts,
+        ):
+            logger.info(
+                "Userbot: skipping DM notification for user {} - message {} was answered during processing",
+                user_id,
+                latest_message_id,
+            )
+            return
 
         action_plan = None
         if app_settings.USERBOT_ACTION_PLAN_ENABLED:
@@ -548,7 +633,13 @@ async def _process_dm_debounced(
             notification += _format_action_plan_for_notification(action_plan)
 
         # Determine if we show approval buttons
-        show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
+        show_buttons = (
+            user_settings and user_settings.enable_reply_approval
+            if user_settings
+            else True
+        )
+        pending_key = None
+        sent_message = None
 
         if show_buttons:
             # Store pending reply in Redis
@@ -581,7 +672,7 @@ async def _process_dm_debounced(
                 len(suggestions),
                 action_plan=action_plan,
             )
-            await bot.send_message(
+            sent_message = await bot.send_message(
                 tg_id,
                 notification,
                 parse_mode="HTML",
@@ -589,7 +680,20 @@ async def _process_dm_debounced(
                 **topic_kwargs,
             )
         else:
-            await bot.send_message(tg_id, notification, parse_mode="HTML", **topic_kwargs)
+            sent_message = await bot.send_message(
+                tg_id,
+                notification,
+                parse_mode="HTML",
+                **topic_kwargs,
+            )
+
+        await _attach_thread_notification(
+            user_id=user_id,
+            thread_id=thread_id,
+            notification_chat_id=tg_id,
+            notification_message_id=getattr(sent_message, "message_id", None),
+            pending_key=pending_key,
+        )
 
         logger.info(
             "Userbot: sent DM notification to user {} from {}", user_id, sender_name
@@ -601,6 +705,7 @@ async def _process_dm_debounced(
 # ---------------------------------------------------------------------------
 # Group message handler — with approval buttons
 # ---------------------------------------------------------------------------
+
 
 async def _handle_group_message(
     event,
@@ -649,6 +754,7 @@ async def _handle_group_message(
             is_mention = True
         if hasattr(event.message, "entities") and event.message.entities:
             from telethon.tl.types import MessageEntityMentionName
+
             for ent in event.message.entities:
                 if isinstance(ent, MessageEntityMentionName) and ent.user_id == me.id:
                     is_mention = True
@@ -658,9 +764,7 @@ async def _handle_group_message(
             return
 
         sender_tg_id = (
-            _coerce_int(getattr(sender, "id", None))
-            or _event_sender_id(event)
-            or 0
+            _coerce_int(getattr(sender, "id", None)) or _event_sender_id(event) or 0
         )
         batch_key, batch_version = await _enqueue_reply_batch_message(
             user_id=user_id,
@@ -719,10 +823,26 @@ async def _process_group_debounced(
             return
 
         latest_message_id = _latest_batch_message_id(batch_messages, event.message.id)
-        if await _check_if_message_read(client, user_id, event.chat_id, latest_message_id):
+        if await _check_if_message_read(
+            client, user_id, event.chat_id, latest_message_id
+        ):
             logger.info(
                 "Userbot: skipping group msg for user {} - message {} already read",
-                user_id, latest_message_id,
+                user_id,
+                latest_message_id,
+            )
+            return
+        latest_message_ts = _latest_batch_ts(batch_messages)
+        if await _has_manual_outgoing_after(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=latest_message_id,
+            message_ts=latest_message_ts,
+        ):
+            logger.info(
+                "Userbot: skipping group msg for user {} - message {} already answered manually",
+                user_id,
+                latest_message_id,
             )
             return
 
@@ -742,7 +862,9 @@ async def _process_group_debounced(
 
         first = getattr(sender, "first_name", None) or ""
         last = getattr(sender, "last_name", None) or ""
-        sender_name = f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        sender_name = (
+            f"{first} {last}".strip() or getattr(sender, "username", None) or "Someone"
+        )
         sender_tg_id = sender_tg_id or getattr(sender, "id", 0)
 
         chat = await event.get_chat()
@@ -755,7 +877,10 @@ async def _process_group_debounced(
         relationship_coro = _get_sender_relationship(user_id, sender_tg_id)
 
         thread, facts, style_samples, relationship = await asyncio.gather(
-            thread_coro, facts_coro, style_coro, relationship_coro,
+            thread_coro,
+            facts_coro,
+            style_coro,
+            relationship_coro,
             return_exceptions=True,
         )
         if isinstance(thread, BaseException):
@@ -798,6 +923,28 @@ async def _process_group_debounced(
             classification=classification,
             suggestions=suggestions,
         )
+
+        if await _check_if_message_read(
+            client, user_id, event.chat_id, latest_message_id
+        ):
+            logger.info(
+                "Userbot: skipping group notification for user {} - message {} was read during processing",
+                user_id,
+                latest_message_id,
+            )
+            return
+        if await _has_manual_outgoing_after(
+            user_id=user_id,
+            chat_id=event.chat_id,
+            message_id=latest_message_id,
+            message_ts=latest_message_ts,
+        ):
+            logger.info(
+                "Userbot: skipping group notification for user {} - message {} was answered during processing",
+                user_id,
+                latest_message_id,
+            )
+            return
 
         action_plan = None
         if app_settings.USERBOT_ACTION_PLAN_ENABLED:
@@ -848,7 +995,13 @@ async def _process_group_debounced(
         if action_plan:
             notification += _format_action_plan_for_notification(action_plan)
 
-        show_buttons = user_settings and user_settings.enable_reply_approval if user_settings else True
+        show_buttons = (
+            user_settings and user_settings.enable_reply_approval
+            if user_settings
+            else True
+        )
+        pending_key = None
+        sent_message = None
 
         if show_buttons:
             pending_key = await _store_pending_reply(
@@ -879,7 +1032,7 @@ async def _process_group_debounced(
                 len(suggestions),
                 action_plan=action_plan,
             )
-            await bot.send_message(
+            sent_message = await bot.send_message(
                 tg_id,
                 notification,
                 parse_mode="HTML",
@@ -887,11 +1040,26 @@ async def _process_group_debounced(
                 **topic_kwargs,
             )
         else:
-            await bot.send_message(tg_id, notification, parse_mode="HTML", **topic_kwargs)
+            sent_message = await bot.send_message(
+                tg_id,
+                notification,
+                parse_mode="HTML",
+                **topic_kwargs,
+            )
+
+        await _attach_thread_notification(
+            user_id=user_id,
+            thread_id=thread_id,
+            notification_chat_id=tg_id,
+            notification_message_id=getattr(sent_message, "message_id", None),
+            pending_key=pending_key,
+        )
 
         logger.info(
             "Userbot: sent group notification to user {} from {} in {}",
-            user_id, sender_name, chat_title,
+            user_id,
+            sender_name,
+            chat_title,
         )
     except Exception as exc:
         logger.error("Userbot delayed group handler error (user {}): {}", user_id, exc)
@@ -900,6 +1068,7 @@ async def _process_group_debounced(
 # ---------------------------------------------------------------------------
 # Approval keyboard builder
 # ---------------------------------------------------------------------------
+
 
 def build_userbot_approval_keyboard(
     pending_key: str,
@@ -963,27 +1132,32 @@ def build_userbot_approval_keyboard(
         rows.append(plan_row)
 
     # Edit and dismiss row
-    rows.append([
-        InlineKeyboardButton(
-            text="✏️ Edit",
-            callback_data=f"ub_edit:{pending_key}",
-        ),
-        InlineKeyboardButton(
-            text="🚫 Dismiss",
-            callback_data=f"ub_dismiss:{pending_key}",
-        ),
-    ])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="✏️ Edit",
+                callback_data=f"ub_edit:{pending_key}",
+            ),
+            InlineKeyboardButton(
+                text="🚫 Dismiss",
+                callback_data=f"ub_dismiss:{pending_key}",
+            ),
+        ]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _build_approval_keyboard(pending_key: str, num_suggestions: int) -> InlineKeyboardMarkup:
+def _build_approval_keyboard(
+    pending_key: str, num_suggestions: int
+) -> InlineKeyboardMarkup:
     return build_userbot_approval_keyboard(pending_key, num_suggestions)
 
 
 # ---------------------------------------------------------------------------
 # Reply burst batching
 # ---------------------------------------------------------------------------
+
 
 def _reply_batch_delay_seconds() -> float:
     return float(
@@ -1066,7 +1240,9 @@ async def _drain_reply_batch_if_current(
     """
     redis = await _get_redis()
     try:
-        raw_items = await redis.eval(script, 2, batch_key, version_key, str(expected_version))
+        raw_items = await redis.eval(
+            script, 2, batch_key, version_key, str(expected_version)
+        )
     finally:
         await redis.aclose()
 
@@ -1099,6 +1275,13 @@ def _latest_batch_message_id(messages: list[dict], fallback: int) -> int:
         if (message_id := _coerce_int(message.get("message_id"))) is not None
     ]
     return max(message_ids) if message_ids else fallback
+
+
+def _latest_batch_ts(messages: list[dict]) -> int:
+    timestamps = [
+        ts for message in messages if (ts := _coerce_int(message.get("ts"))) is not None
+    ]
+    return max(timestamps) if timestamps else 0
 
 
 def _batch_message_text(messages: list[dict]) -> str:
@@ -1137,6 +1320,7 @@ async def _check_group_notification_rate_limit(user_id: int, chat_id: int) -> bo
 # ---------------------------------------------------------------------------
 # Redis pending reply storage
 # ---------------------------------------------------------------------------
+
 
 async def _store_pending_reply(
     *,
@@ -1252,6 +1436,7 @@ async def delete_pending_action_plan(pending_key: str) -> None:
 # Reply rate limiting
 # ---------------------------------------------------------------------------
 
+
 async def check_reply_rate_limit(user_id: int) -> bool:
     """Return True if the user is under their daily reply limit (read-only check)."""
     today_str = date.today().isoformat()
@@ -1285,6 +1470,7 @@ async def increment_reply_counter(user_id: int) -> None:
 # Skip marker for bot-sent outgoing messages
 # ---------------------------------------------------------------------------
 
+
 async def mark_bot_sent_reply(user_id: int, chat_id: int) -> None:
     """
     Set a short-lived marker so the outgoing handler skips
@@ -1298,9 +1484,62 @@ async def mark_bot_sent_reply(user_id: int, chat_id: int) -> None:
         await redis.aclose()
 
 
+def _manual_outgoing_key(user_id: int, chat_id: int) -> str:
+    return f"ub_outgoing:{user_id}:{chat_id}"
+
+
+async def _record_manual_outgoing(
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: int | None,
+) -> None:
+    redis = await _get_redis()
+    try:
+        await redis.setex(
+            _manual_outgoing_key(user_id, chat_id),
+            86_400,
+            json.dumps(
+                {
+                    "message_id": message_id,
+                    "ts": int(time.time()),
+                },
+                ensure_ascii=False,
+            ),
+        )
+    finally:
+        await redis.aclose()
+
+
+async def _has_manual_outgoing_after(
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: int,
+    message_ts: int = 0,
+) -> bool:
+    redis = await _get_redis()
+    try:
+        raw = await redis.get(_manual_outgoing_key(user_id, chat_id))
+    finally:
+        await redis.aclose()
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    outgoing_id = _coerce_int(data.get("message_id"))
+    if outgoing_id is not None and outgoing_id > message_id:
+        return True
+    outgoing_ts = _coerce_int(data.get("ts"))
+    return bool(outgoing_ts and message_ts and outgoing_ts > message_ts)
+
+
 # ---------------------------------------------------------------------------
 # Persistent thread tracking integration
 # ---------------------------------------------------------------------------
+
 
 async def _classify_incoming_message(
     *,
@@ -1384,13 +1623,128 @@ async def _persist_incoming_thread(
     return None
 
 
+async def _attach_thread_notification(
+    *,
+    user_id: int,
+    thread_id: int | None,
+    notification_chat_id: int | None,
+    notification_message_id: int | None,
+    pending_key: str | None,
+) -> None:
+    try:
+        from ..db import get_session
+        from .userbot_thread_service import UserBotThreadService
+
+        async with get_session() as session:
+            service = UserBotThreadService()
+            await service.attach_notification(
+                session,
+                user_id=user_id,
+                thread_id=thread_id,
+                notification_chat_id=notification_chat_id,
+                notification_message_id=notification_message_id,
+                pending_key=pending_key,
+            )
+    except Exception as exc:
+        logger.debug(
+            "Userbot notification tracking failed for user {} thread {}: {}",
+            user_id,
+            thread_id,
+            exc,
+        )
+
+
+async def _clear_read_thread_notifications(
+    *,
+    user_id: int,
+    chat_id: int,
+    max_read_message_id: int,
+    bot: Bot,
+) -> None:
+    try:
+        from ..db import get_session
+        from .userbot_thread_service import UserBotThreadService
+
+        async with get_session() as session:
+            service = UserBotThreadService()
+            cleanup_targets = await service.clear_notifications_for_read(
+                session,
+                user_id=user_id,
+                chat_id=chat_id,
+                max_read_message_id=max_read_message_id,
+            )
+    except Exception as exc:
+        logger.debug(
+            "Userbot read notification cleanup failed for user {} chat {}: {}",
+            user_id,
+            chat_id,
+            exc,
+        )
+        return
+
+    for cleanup_target in cleanup_targets:
+        await _cleanup_thread_notification(
+            bot=bot,
+            cleanup_target=cleanup_target,
+            reason="read",
+        )
+
+
+async def _cleanup_thread_notification(
+    *,
+    bot: Bot | None,
+    cleanup_target: dict,
+    reason: str,
+) -> None:
+    pending_key = cleanup_target.get("pending_key")
+    if pending_key:
+        try:
+            await delete_pending_reply(str(pending_key))
+        except Exception as exc:
+            logger.debug("Userbot pending cleanup failed ({}): {}", reason, exc)
+
+    if not bot:
+        return
+
+    notification_chat_id = _coerce_int(cleanup_target.get("notification_chat_id"))
+    notification_message_id = _coerce_int(cleanup_target.get("notification_message_id"))
+    if not notification_chat_id or not notification_message_id:
+        return
+
+    try:
+        await bot.delete_message(notification_chat_id, notification_message_id)
+    except Exception as exc:
+        logger.debug(
+            "Userbot notification delete failed for chat {} message {} ({}): {}",
+            notification_chat_id,
+            notification_message_id,
+            reason,
+            exc,
+        )
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=notification_chat_id,
+                message_id=notification_message_id,
+                reply_markup=None,
+            )
+        except Exception as fallback_exc:
+            logger.debug(
+                "Userbot notification markup cleanup failed for chat {} message {}: {}",
+                notification_chat_id,
+                notification_message_id,
+                fallback_exc,
+            )
+
+
 async def _mark_latest_thread_replied(
     *,
     user_id: int,
     chat_id: int,
-    message_id: int,
+    message_id: int | None,
+    chat_type: str | None,
+    reply_to_message_id: int | None,
     reply_text: str,
-) -> None:
+) -> dict | None:
     """Mark the latest open thread in this chat as replied after a real outgoing message."""
     try:
         from ..db import get_session
@@ -1398,15 +1752,19 @@ async def _mark_latest_thread_replied(
 
         async with get_session() as session:
             service = UserBotThreadService()
-            await service.mark_replied_by_outgoing(
+            return await service.mark_replied_by_outgoing(
                 session,
                 user_id=user_id,
                 chat_id=chat_id,
+                message_id=message_id,
+                chat_type=chat_type,
+                reply_to_message_id=reply_to_message_id,
             )
     except TypeError as exc:
         logger.debug("Userbot replied marker signature mismatch: {}", exc)
     except Exception as exc:
         logger.debug("Userbot replied marker failed for user {}: {}", user_id, exc)
+    return None
 
 
 def _short_summary(text: str, limit: int = 160) -> str:
@@ -1432,6 +1790,7 @@ def _thread_summary(conversation_thread: list[dict], limit: int = 800) -> str:
 # Context assembly for reply suggestions
 # ===========================================================================
 
+
 async def _fetch_conversation_thread(
     client: TelegramClient, chat_id: int
 ) -> list[dict]:
@@ -1452,15 +1811,19 @@ async def _fetch_conversation_thread(
             first = getattr(sender, "first_name", None) or ""
             last = getattr(sender, "last_name", None) or ""
             name = f"{first} {last}".strip() or getattr(sender, "username", None) or "?"
-            thread.append({
-                "sender_id": msg.sender_id,
-                "name": name,
-                "text": msg.message[:300],
-                "is_me": msg.sender_id == me.id,
-            })
+            thread.append(
+                {
+                    "sender_id": msg.sender_id,
+                    "name": name,
+                    "text": msg.message[:300],
+                    "is_me": msg.sender_id == me.id,
+                }
+            )
         return thread
     except Exception as exc:
-        logger.debug("Failed to fetch conversation thread for chat {}: {}", chat_id, exc)
+        logger.debug(
+            "Failed to fetch conversation thread for chat {}: {}", chat_id, exc
+        )
         return []
 
 
@@ -1548,6 +1911,7 @@ async def _update_sender_relationship(
 # Action-plan context and validation
 # ---------------------------------------------------------------------------
 
+
 async def _fetch_action_target_candidates(
     *,
     client: TelegramClient,
@@ -1564,7 +1928,9 @@ async def _fetch_action_target_candidates(
     candidates: list[dict] = []
     seen_chat_ids: set[int] = set()
 
-    def add_candidate(*, ref: str, label: str, chat_id: int, username: str | None = None) -> None:
+    def add_candidate(
+        *, ref: str, label: str, chat_id: int, username: str | None = None
+    ) -> None:
         if _ids_equal(chat_id, assistant_bot_id) or chat_id in seen_chat_ids:
             return
         clean_label = _short_summary(label, 80)
@@ -1583,7 +1949,9 @@ async def _fetch_action_target_candidates(
     sender_id = _coerce_int(getattr(sender, "id", None))
     if sender_id and not _is_telegram_bot_sender(sender):
         sender_username = getattr(sender, "username", None)
-        target_chat_id = _event_chat_id(event) if getattr(event, "is_private", False) else sender_id
+        target_chat_id = (
+            _event_chat_id(event) if getattr(event, "is_private", False) else sender_id
+        )
         if target_chat_id:
             add_candidate(
                 ref="sender",
@@ -1602,7 +1970,9 @@ async def _fetch_action_target_candidates(
             if not entity or _is_telegram_bot_sender(entity):
                 continue
 
-            chat_id = _coerce_int(getattr(dialog, "id", None) or getattr(entity, "id", None))
+            chat_id = _coerce_int(
+                getattr(dialog, "id", None) or getattr(entity, "id", None)
+            )
             if not chat_id:
                 continue
             first = getattr(entity, "first_name", None) or ""
@@ -1660,14 +2030,18 @@ async def _generate_action_plan(
             "Allowed contact target refs:\n" + _action_target_prompt(target_candidates),
         ]
         if user_facts:
-            context_parts.append("User facts:\n" + "\n".join(f"- {f}" for f in user_facts[:12]))
+            context_parts.append(
+                "User facts:\n" + "\n".join(f"- {f}" for f in user_facts[:12])
+            )
         if style_samples:
             context_parts.append(
                 "Recent user writing style:\n"
                 + "\n".join(f"- {sample}" for sample in style_samples[:8])
             )
         if conversation_thread:
-            context_parts.append("Conversation:\n" + _thread_summary(conversation_thread, limit=1200))
+            context_parts.append(
+                "Conversation:\n" + _thread_summary(conversation_thread, limit=1200)
+            )
 
         response = await async_client.chat.completions.create(
             model=app_settings.EXTRACTOR_MODEL_ID,
@@ -1677,7 +2051,7 @@ async def _generate_action_plan(
                     "content": (
                         "You draft safe multi-step Telegram action plans for a personal assistant.\n"
                         "Return ONLY valid JSON.\n"
-                        "If one normal reply is enough, return {\"should_propose\": false, \"steps\": []}.\n"
+                        'If one normal reply is enough, return {"should_propose": false, "steps": []}.\n'
                         "Use a plan only when the incoming message likely needs coordination, "
                         "a follow-up, a reminder, or contacting another known person.\n"
                         "Allowed step types:\n"
@@ -1692,9 +2066,7 @@ async def _generate_action_plan(
                 {
                     "role": "user",
                     "content": (
-                        "<context>\n"
-                        + "\n\n".join(context_parts)
-                        + "\n</context>\n\n"
+                        "<context>\n" + "\n\n".join(context_parts) + "\n</context>\n\n"
                         f"<new_message>\n{sender_name}: {message_text[:800]}\n</new_message>"
                     ),
                 },
@@ -1706,7 +2078,9 @@ async def _generate_action_plan(
         parsed = _parse_json_object(raw)
         return _sanitize_action_plan(parsed, target_candidates)
     except Exception as exc:
-        logger.debug("Userbot action plan generation failed for user {}: {}", user_id, exc)
+        logger.debug(
+            "Userbot action plan generation failed for user {}: {}", user_id, exc
+        )
         return None
 
 
@@ -1732,7 +2106,9 @@ def _sanitize_action_plan(raw_plan: dict, target_candidates: list[dict]) -> dict
         return None
 
     candidate_by_ref = {
-        str(candidate.get("ref")): candidate for candidate in target_candidates if candidate.get("ref")
+        str(candidate.get("ref")): candidate
+        for candidate in target_candidates
+        if candidate.get("ref")
     }
     steps: list[dict] = []
     raw_steps = raw_plan.get("steps")
@@ -1750,12 +2126,16 @@ def _sanitize_action_plan(raw_plan: dict, target_candidates: list[dict]) -> dict
         return None
 
     return {
-        "title": _short_summary(str(raw_plan.get("title") or "Suggested action plan"), 80),
+        "title": _short_summary(
+            str(raw_plan.get("title") or "Suggested action plan"), 80
+        ),
         "steps": steps,
     }
 
 
-def _sanitize_action_step(raw_step: dict, candidate_by_ref: dict[str, dict]) -> dict | None:
+def _sanitize_action_step(
+    raw_step: dict, candidate_by_ref: dict[str, dict]
+) -> dict | None:
     step_type = str(raw_step.get("type") or "").strip()
     reason = _short_summary(str(raw_step.get("reason") or ""), 160)
 
@@ -1778,7 +2158,9 @@ def _sanitize_action_step(raw_step: dict, candidate_by_ref: dict[str, dict]) -> 
         if not text:
             return None
         if not target:
-            target_name = _short_summary(str(raw_step.get("target_name") or target_ref or "contact"), 80)
+            target_name = _short_summary(
+                str(raw_step.get("target_name") or target_ref or "contact"), 80
+            )
             return {
                 "type": "ask_user_clarification",
                 "question": f"Which Telegram chat should receive this draft for {target_name}?",
@@ -1968,7 +2350,9 @@ async def _run_auto_reminder_step(
             message_text=message_text,
             job_id=job_id,
         )
-    logger.info("Userbot: silently scheduled reminder for user {} (job_id={})", user_id, job_id)
+    logger.info(
+        "Userbot: silently scheduled reminder for user {} (job_id={})", user_id, job_id
+    )
     return True, job_id
 
 
@@ -2033,6 +2417,7 @@ async def _set_auto_reminder_job_id(
 # ===========================================================================
 # LLM helpers
 # ===========================================================================
+
 
 async def _classify_post_relevance(
     text: str,
@@ -2224,16 +2609,15 @@ async def flush_channel_batch(user_id: int, bot: "Bot") -> None:
             **topic_kwargs,
         )
         # Save summarized digest to conversation history
-        summaries = "; ".join(
-            f"{it['channel_name']}: {it['summary']}" for it in items
-        )
+        summaries = "; ".join(f"{it['channel_name']}: {it['summary']}" for it in items)
         await _save_notification_to_history(
             tg_chat_id=tg_id,
             text=f"[Channel digest — {len(items)} posts]: {summaries}",
         )
         logger.info(
             "Userbot: flushed channel digest ({} posts) for user {}",
-            len(items), user_id,
+            len(items),
+            user_id,
         )
 
 
@@ -2282,16 +2666,12 @@ async def _generate_reply_suggestions(
         # User profile
         if user_facts:
             facts_block = "\n".join(f"- {f}" for f in user_facts[:20])
-            system_parts.append(
-                f"\n<user_profile>\n{facts_block}\n</user_profile>"
-            )
+            system_parts.append(f"\n<user_profile>\n{facts_block}\n</user_profile>")
 
         # Communication style samples (few-shot examples of how the user writes)
         if style_samples:
             # Show most recent 15 samples
-            samples_block = "\n".join(
-                f"- \"{s}\"" for s in style_samples[:15]
-            )
+            samples_block = "\n".join(f'- "{s}"' for s in style_samples[:15])
             system_parts.append(
                 "\n<communication_style>\n"
                 "Here are real messages this person recently sent. "
@@ -2349,7 +2729,11 @@ async def _generate_reply_suggestions(
             temperature=0.7,
         )
         raw = (response.choices[0].message.content or "").strip()
-        lines = [line.strip().strip('"').strip("'") for line in raw.splitlines() if line.strip()]
+        lines = [
+            line.strip().strip('"').strip("'")
+            for line in raw.splitlines()
+            if line.strip()
+        ]
         # Remove any numbering like "1. " or "1) "
         cleaned = []
         for line in lines:
@@ -2425,7 +2809,9 @@ async def _infer_and_cache_sender_relationship(
             await _update_sender_relationship(user_id, sender_tg_id, description)
             logger.info(
                 "Userbot: inferred relationship for user {} ↔ {}: {}",
-                user_id, sender_name, description,
+                user_id,
+                sender_name,
+                description,
             )
     except Exception as exc:
         logger.debug("Sender relationship inference failed: {}", exc)
@@ -2434,6 +2820,7 @@ async def _infer_and_cache_sender_relationship(
 # ---------------------------------------------------------------------------
 # DB / Redis helpers
 # ---------------------------------------------------------------------------
+
 
 async def _get_user_settings(user_id: int):
     """Return UserSettings for the given bot user_id, or None on error."""
@@ -2481,18 +2868,22 @@ async def _get_tg_delivery(user_id: int) -> tuple[int | None, dict[str, int]]:
                 return None, {}
             return user.tg_chat_id, topic_kwargs_for_user(user)
     except Exception as exc:
-        logger.error("Userbot: could not fetch tg_chat_id for user {}: {}", user_id, exc)
+        logger.error(
+            "Userbot: could not fetch tg_chat_id for user {}: {}", user_id, exc
+        )
         return None, {}
 
 
 async def _get_redis():
     from redis.asyncio import Redis
+
     return Redis.from_url(app_settings.REDIS_URL)
 
 
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
 
 def _event_sender_id(event) -> int | None:
     sender_id = getattr(event, "sender_id", None)
@@ -2523,6 +2914,12 @@ def _ids_equal(left, right) -> bool:
 def _is_outgoing_event(event) -> bool:
     message = getattr(event, "message", None)
     return bool(getattr(event, "out", False) or getattr(message, "out", False))
+
+
+def _reply_to_message_id(event) -> int | None:
+    message = getattr(event, "message", None)
+    reply_to = getattr(message, "reply_to", None)
+    return _coerce_int(getattr(reply_to, "reply_to_msg_id", None))
 
 
 def _is_private_chat_with_telegram_id(event, telegram_id: int | None) -> bool:
