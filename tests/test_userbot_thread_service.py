@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.models.core_memory import CoreMemory  # noqa: F401
@@ -15,6 +16,7 @@ from app.models.settings import UserSettings  # noqa: F401
 from app.models.userbot_thread import UserBotThread
 from app.models.user_trigger import UserTrigger  # noqa: F401
 from app.models.working_memory import WorkingMemory  # noqa: F401
+from app.services import userbot_monitor
 from app.services.userbot_thread_service import UserBotThreadService
 
 
@@ -179,6 +181,119 @@ def test_read_cleanup_clears_notification_but_keeps_thread_open():
     assert thread.notification_chat_id is None
     assert thread.notification_message_id is None
     assert thread.pending_key is None
+    assert session.added == [thread]
+
+
+def test_reconcile_read_deletes_notification_and_pending(monkeypatch):
+    service = UserBotThreadService()
+    thread = UserBotThread(
+        id=42,
+        user_id=1,
+        chat_id=100,
+        status="open",
+        message_id=10,
+        notification_chat_id=300,
+        notification_message_id=400,
+        pending_key="pending-1",
+    )
+    session = _FakeSession(execute_result=[thread])
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(),
+        edit_message_reply_markup=AsyncMock(),
+    )
+    delete_pending = AsyncMock()
+
+    monkeypatch.setattr(
+        service, "_has_thread_outgoing_after", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(service, "_is_thread_message_read", AsyncMock(return_value=True))
+    monkeypatch.setattr(userbot_monitor, "delete_pending_reply", delete_pending)
+
+    count = asyncio.run(service.reconcile_open_threads(session, bot))
+
+    assert count == 1
+    assert thread.status == "open"
+    assert thread.notification_chat_id is None
+    assert thread.notification_message_id is None
+    assert thread.pending_key is None
+    delete_pending.assert_awaited_once_with("pending-1")
+    bot.delete_message.assert_awaited_once_with(300, 400)
+    bot.edit_message_reply_markup.assert_not_awaited()
+    assert session.added == [thread]
+
+
+def test_reconcile_outgoing_marks_replied_and_deletes_notification(monkeypatch):
+    service = UserBotThreadService()
+    thread = UserBotThread(
+        id=42,
+        user_id=1,
+        chat_id=100,
+        status="open",
+        message_id=10,
+        notification_chat_id=300,
+        notification_message_id=400,
+        pending_key="pending-1",
+    )
+    session = _FakeSession(execute_result=[thread])
+    bot = SimpleNamespace(delete_message=AsyncMock())
+    delete_pending = AsyncMock()
+
+    monkeypatch.setattr(
+        service, "_has_thread_outgoing_after", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        service,
+        "_is_thread_message_read",
+        AsyncMock(side_effect=AssertionError("read check should not run")),
+    )
+    monkeypatch.setattr(userbot_monitor, "delete_pending_reply", delete_pending)
+
+    count = asyncio.run(service.reconcile_open_threads(session, bot))
+
+    assert count == 1
+    assert thread.status == "replied"
+    assert thread.last_outgoing_at is not None
+    assert thread.response_deadline_at is None
+    assert thread.notification_chat_id is None
+    assert thread.notification_message_id is None
+    assert thread.pending_key is None
+    delete_pending.assert_awaited_once_with("pending-1")
+    bot.delete_message.assert_awaited_once_with(300, 400)
+    assert session.added == [thread]
+
+
+def test_send_due_followup_skips_thread_answered_outside_bot(monkeypatch):
+    service = UserBotThreadService()
+    thread = UserBotThread(
+        id=42,
+        user_id=1,
+        chat_id=100,
+        status="open",
+        message_id=10,
+        requires_response=True,
+        response_deadline_at=datetime.now(timezone.utc),
+    )
+    session = _FakeSession()
+    bot = SimpleNamespace(send_message=AsyncMock(), delete_message=AsyncMock())
+
+    monkeypatch.setattr(service, "reconcile_open_threads", AsyncMock(return_value=0))
+    monkeypatch.setattr(service, "due_followups", AsyncMock(return_value=[thread]))
+    monkeypatch.setattr(
+        service, "_has_thread_outgoing_after", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        service,
+        "_can_send_followup",
+        AsyncMock(side_effect=AssertionError("follow-up should be skipped first")),
+    )
+
+    sent = asyncio.run(service.send_due_followups(session, bot))
+
+    assert sent == 0
+    assert thread.status == "replied"
+    assert thread.last_outgoing_at is not None
+    assert thread.response_deadline_at is None
+    bot.send_message.assert_not_awaited()
     assert session.added == [thread]
 
 

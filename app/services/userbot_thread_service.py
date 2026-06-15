@@ -17,6 +17,13 @@ from ..llm.client import async_client
 from ..models.settings import UserSettings
 from ..models.users import User
 from ..utils.telegram_topics import topic_kwargs_for_user
+from .userbot_state_probe import (
+    cache_read_marker,
+    get_cached_read_marker,
+    get_read_inbox_max_id,
+    has_cached_manual_outgoing_after,
+    has_live_outgoing_after,
+)
 
 
 OPEN_STATUSES = ("open", "reminded")
@@ -60,7 +67,13 @@ class UserBotThreadService:
                         "role": "system",
                         "content": (
                             "You classify incoming Telegram messages for a personal assistant. "
-                            "Return only JSON. Be conservative. Do not copy full conversations. "
+                            "Return only JSON. Be conservative about reminders: "
+                            "requires_response is true only when the sender is clearly asking "
+                            "a question, requesting an action/decision, making an invitation that "
+                            "needs an answer, or expecting acknowledgement for coordination. "
+                            "Set requires_response=false for FYI updates, thanks, reactions, "
+                            "conversation closers, bot/service notices, or messages already "
+                            "answered by the prior conversation. Do not copy full conversations. "
                             "Summaries must be brief. Memory items must be stable facts or explicit "
                             "commitments/preferences, never gossip or private raw message text. "
                             "suggested_followup_at must be ISO-8601 UTC or null."
@@ -371,22 +384,122 @@ class UserBotThreadService:
         )
         return list(result.scalars().all())
 
+    async def reconcile_open_threads(
+        self,
+        session: AsyncSession,
+        bot: Bot | None,
+        *,
+        user_id: int | None = None,
+        limit: int = 200,
+    ) -> int:
+        """Catch up missed read/outgoing events before sending reminders."""
+        cls = self._thread_model()
+        filters = [
+            cls.status.in_(OPEN_STATUSES),
+            cls.message_id.is_not(None),
+            or_(
+                cls.notification_message_id.is_not(None),
+                cls.pending_key.is_not(None),
+            ),
+        ]
+        if user_id is not None:
+            filters.append(cls.user_id == user_id)
+
+        result = await session.execute(
+            select(cls)
+            .where(*filters)
+            .order_by(cls.last_incoming_at.desc())
+            .limit(limit)
+        )
+
+        reconciled = 0
+        now = datetime.now(timezone.utc)
+        for thread in result.scalars().all():
+            chat_id = _coerce_int(getattr(thread, "chat_id", None))
+            message_id = _coerce_int(getattr(thread, "message_id", None))
+            if chat_id is None or message_id is None:
+                continue
+
+            if await self._has_thread_outgoing_after(
+                thread.user_id,
+                chat_id,
+                message_id,
+            ):
+                cleanup_target = _notification_cleanup_target(thread)
+                thread.status = "replied"
+                thread.last_outgoing_at = now
+                thread.response_deadline_at = None
+                _clear_notification_fields(thread)
+                if hasattr(thread, "updated_at"):
+                    thread.updated_at = now
+                session.add(thread)
+                await _cleanup_notification_target(
+                    bot=bot,
+                    cleanup_target=cleanup_target,
+                    reason="outgoing_reconcile",
+                )
+                reconciled += 1
+                continue
+
+            if await self._is_thread_message_read(thread.user_id, chat_id, message_id):
+                cleanup_target = _notification_cleanup_target(thread)
+                if cleanup_target.get("notification_message_id") or cleanup_target.get(
+                    "pending_key"
+                ):
+                    _clear_notification_fields(thread)
+                    if hasattr(thread, "updated_at"):
+                        thread.updated_at = now
+                    session.add(thread)
+                    await _cleanup_notification_target(
+                        bot=bot,
+                        cleanup_target=cleanup_target,
+                        reason="read_reconcile",
+                    )
+                    reconciled += 1
+
+        return reconciled
+
     async def _is_thread_message_read(
         self, user_id: int, chat_id: int, message_id: int
     ) -> bool:
-        """Check Redis whether the user has already read this message."""
+        """Check cached and live Telegram read state for this incoming message."""
         try:
-            from redis.asyncio import Redis
+            cached_max = await get_cached_read_marker(user_id, chat_id)
+            if cached_max is not None and cached_max >= message_id:
+                return True
 
-            redis = Redis.from_url(app_settings.REDIS_URL)
-            try:
-                cached_max = await redis.get(f"ub_read:{user_id}:{chat_id}")
-                if cached_max and int(cached_max) >= message_id:
-                    return True
-            finally:
-                await redis.aclose()
+            from .userbot_manager import UserBotManager
+
+            client = UserBotManager.get_client(user_id)
+            if not client:
+                return False
+            read_max = await get_read_inbox_max_id(client, chat_id)
+            if read_max is not None:
+                await cache_read_marker(user_id, chat_id, read_max)
+                return read_max >= message_id
         except Exception as exc:
             logger.debug("Failed to check read status for follow-up: {}", exc)
+        return False
+
+    async def _has_thread_outgoing_after(
+        self, user_id: int, chat_id: int, message_id: int
+    ) -> bool:
+        try:
+            if await has_cached_manual_outgoing_after(
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+            ):
+                return True
+
+            from .userbot_manager import UserBotManager
+
+            client = UserBotManager.get_client(user_id)
+            if not client:
+                return False
+            return await has_live_outgoing_after(client, chat_id, message_id)
+        except Exception as exc:
+            logger.debug("Failed to check outgoing status for follow-up: {}", exc)
         return False
 
     async def send_due_followups(
@@ -396,8 +509,33 @@ class UserBotThreadService:
         *,
         user_id: int | None = None,
     ) -> int:
+        await self.reconcile_open_threads(session, bot, user_id=user_id)
         sent = 0
         for thread in await self.due_followups(session, user_id=user_id):
+            chat_id = _coerce_int(getattr(thread, "chat_id", None))
+            message_id = _coerce_int(getattr(thread, "message_id", None))
+            if chat_id is not None and message_id is not None:
+                if await self._has_thread_outgoing_after(
+                    thread.user_id,
+                    chat_id,
+                    message_id,
+                ):
+                    cleanup_target = _notification_cleanup_target(thread)
+                    now = datetime.now(timezone.utc)
+                    thread.status = "replied"
+                    thread.last_outgoing_at = now
+                    thread.response_deadline_at = None
+                    _clear_notification_fields(thread)
+                    if hasattr(thread, "updated_at"):
+                        thread.updated_at = now
+                    session.add(thread)
+                    await _cleanup_notification_target(
+                        bot=bot,
+                        cleanup_target=cleanup_target,
+                        reason="outgoing_before_followup",
+                    )
+                    continue
+
             if not await self._can_send_followup(session, thread.user_id):
                 continue
             user = await session.get(User, thread.user_id)
@@ -609,6 +747,65 @@ def _clear_notification_fields(thread: Any) -> None:
     thread.notification_message_id = None
     thread.notification_sent_at = None
     thread.pending_key = None
+
+
+async def _cleanup_notification_target(
+    *,
+    bot: Bot | None,
+    cleanup_target: dict[str, Any],
+    reason: str,
+) -> None:
+    pending_key = cleanup_target.get("pending_key")
+    if pending_key:
+        try:
+            from .userbot_monitor import delete_pending_reply
+
+            await delete_pending_reply(str(pending_key))
+        except Exception as exc:
+            logger.debug("Userbot pending cleanup failed ({}): {}", reason, exc)
+
+    if not bot:
+        return
+
+    notification_chat_id = _coerce_int(cleanup_target.get("notification_chat_id"))
+    notification_message_id = _coerce_int(cleanup_target.get("notification_message_id"))
+    if not notification_chat_id or not notification_message_id:
+        return
+
+    try:
+        await bot.delete_message(notification_chat_id, notification_message_id)
+    except Exception as exc:
+        logger.debug(
+            "Userbot notification delete failed for chat {} message {} ({}): {}",
+            notification_chat_id,
+            notification_message_id,
+            reason,
+            exc,
+        )
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=notification_chat_id,
+                message_id=notification_message_id,
+                reply_markup=None,
+            )
+        except Exception as fallback_exc:
+            logger.debug(
+                "Userbot notification markup cleanup failed for chat {} message {}: {}",
+                notification_chat_id,
+                notification_message_id,
+                fallback_exc,
+            )
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode(errors="ignore")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _rate_key(user_id: int) -> str:

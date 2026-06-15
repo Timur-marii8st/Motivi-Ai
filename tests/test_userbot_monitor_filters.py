@@ -135,6 +135,44 @@ def test_reply_batch_text_groups_multiple_messages():
     ) == 11
 
 
+def test_check_if_message_read_uses_live_dialog_cursor(monkeypatch):
+    cache_read = AsyncMock()
+    get_live_cursor = AsyncMock(return_value=15)
+
+    monkeypatch.setattr(
+        userbot_monitor,
+        "get_cached_read_marker",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(userbot_monitor, "get_read_inbox_max_id", get_live_cursor)
+    monkeypatch.setattr(userbot_monitor, "cache_read_marker", cache_read)
+
+    is_read = asyncio.run(
+        userbot_monitor._check_if_message_read(
+            client=object(),
+            user_id=1,
+            chat_id=100,
+            message_id=10,
+        )
+    )
+
+    assert is_read is True
+    get_live_cursor.assert_awaited_once()
+    cache_read.assert_awaited_once_with(1, 100, 15)
+
+
+def test_classification_requires_response_normalizes_string_false():
+    assert not userbot_monitor._classification_requires_response(
+        {"requires_response": "false"}
+    )
+    assert not userbot_monitor._classification_requires_response(
+        {"requires_response": "нет"}
+    )
+    assert userbot_monitor._classification_requires_response(
+        {"requires_response": "yes"}
+    )
+
+
 def test_auto_reminder_steps_are_hidden_after_execution(monkeypatch):
     calls = []
 

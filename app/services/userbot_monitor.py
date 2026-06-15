@@ -47,6 +47,13 @@ from telethon import TelegramClient, events
 from ..config import settings as app_settings
 from ..llm.client import async_client
 from ..utils.telegram_topics import topic_kwargs_for_user
+from .userbot_state_probe import (
+    cache_manual_outgoing,
+    cache_read_marker,
+    get_cached_read_marker,
+    get_read_inbox_max_id,
+    has_cached_manual_outgoing_after,
+)
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -137,20 +144,13 @@ async def _handle_message_read(event, user_id: int, bot: Bot | None = None) -> N
         max_read = getattr(event, "max_id", None) or getattr(event, "max_read", None)
         if not chat_id or not max_read:
             return
-        redis = await _get_redis()
-        try:
-            await redis.setex(
-                f"ub_read:{user_id}:{chat_id}",
-                3600,
-                str(max_read),
-            )
-        finally:
-            await redis.aclose()
+        max_read_id = int(max_read)
+        await cache_read_marker(user_id, chat_id, max_read_id)
         if bot:
             await _clear_read_thread_notifications(
                 user_id=user_id,
                 chat_id=chat_id,
-                max_read_message_id=int(max_read),
+                max_read_message_id=max_read_id,
                 bot=bot,
             )
     except Exception as exc:
@@ -165,21 +165,15 @@ async def _check_if_message_read(
 ) -> bool:
     """Return True if the message has already been read by the user."""
     # 1. Fast path: Redis cache from live MessageRead events
-    redis = await _get_redis()
-    try:
-        cached_max = await redis.get(f"ub_read:{user_id}:{chat_id}")
-        if cached_max and int(cached_max) >= message_id:
-            return True
-    finally:
-        await redis.aclose()
+    cached_max = await get_cached_read_marker(user_id, chat_id)
+    if cached_max is not None and cached_max >= message_id:
+        return True
 
     # 2. Fallback: ask Telethon for the current dialog read cursor
-    try:
-        dialog = await client.get_dialog(chat_id)
-        if dialog and getattr(dialog, "read_inbox_max_id", 0) >= message_id:
-            return True
-    except Exception:
-        pass
+    read_max = await get_read_inbox_max_id(client, chat_id)
+    if read_max is not None:
+        await cache_read_marker(user_id, chat_id, read_max)
+        return read_max >= message_id
 
     return False
 
@@ -530,6 +524,33 @@ async def _process_dm_debounced(
             )
             relationship = None
 
+        classification = await _classify_incoming_message(
+            user_id=user_id,
+            text=text,
+            sender_name=sender_name,
+            chat_type="dm",
+            conversation_thread=thread,
+        )
+        summary = classification.get("summary") or _short_summary(text)
+        if not _classification_requires_response(classification):
+            await _persist_incoming_thread(
+                user_id=user_id,
+                chat_id=event.chat_id,
+                message_id=latest_message_id,
+                sender_name=sender_name,
+                sender_tg_id=sender_tg_id,
+                chat_type="dm",
+                message_text=text,
+                summary=summary,
+                classification=classification,
+                suggestions=[],
+            )
+            logger.info(
+                "Userbot: skipping DM notification for user {} - no response required",
+                user_id,
+            )
+            return
+
         suggestions = await _generate_reply_suggestions(
             user_id=user_id,
             message_text=text,
@@ -541,14 +562,6 @@ async def _process_dm_debounced(
             sender_relationship=relationship,
         )
 
-        classification = await _classify_incoming_message(
-            user_id=user_id,
-            text=text,
-            sender_name=sender_name,
-            chat_type="dm",
-            conversation_thread=thread,
-        )
-        summary = classification.get("summary") or _short_summary(text)
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
             chat_id=event.chat_id,
@@ -892,6 +905,33 @@ async def _process_group_debounced(
         if isinstance(relationship, BaseException):
             relationship = None
 
+        classification = await _classify_incoming_message(
+            user_id=user_id,
+            text=text,
+            sender_name=sender_name,
+            chat_type="group",
+            conversation_thread=thread,
+        )
+        summary = classification.get("summary") or _short_summary(text)
+        if not _classification_requires_response(classification):
+            await _persist_incoming_thread(
+                user_id=user_id,
+                chat_id=event.chat_id,
+                message_id=latest_message_id,
+                sender_name=sender_name,
+                sender_tg_id=sender_tg_id,
+                chat_type="group",
+                message_text=text,
+                summary=summary,
+                classification=classification,
+                suggestions=[],
+            )
+            logger.info(
+                "Userbot: skipping group notification for user {} - no response required",
+                user_id,
+            )
+            return
+
         suggestions = await _generate_reply_suggestions(
             user_id=user_id,
             message_text=text,
@@ -903,14 +943,6 @@ async def _process_group_debounced(
             sender_relationship=relationship,
         )
 
-        classification = await _classify_incoming_message(
-            user_id=user_id,
-            text=text,
-            sender_name=sender_name,
-            chat_type="group",
-            conversation_thread=thread,
-        )
-        summary = classification.get("summary") or _short_summary(text)
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
             chat_id=event.chat_id,
@@ -1484,31 +1516,17 @@ async def mark_bot_sent_reply(user_id: int, chat_id: int) -> None:
         await redis.aclose()
 
 
-def _manual_outgoing_key(user_id: int, chat_id: int) -> str:
-    return f"ub_outgoing:{user_id}:{chat_id}"
-
-
 async def _record_manual_outgoing(
     *,
     user_id: int,
     chat_id: int,
     message_id: int | None,
 ) -> None:
-    redis = await _get_redis()
-    try:
-        await redis.setex(
-            _manual_outgoing_key(user_id, chat_id),
-            86_400,
-            json.dumps(
-                {
-                    "message_id": message_id,
-                    "ts": int(time.time()),
-                },
-                ensure_ascii=False,
-            ),
-        )
-    finally:
-        await redis.aclose()
+    await cache_manual_outgoing(
+        user_id=user_id,
+        chat_id=chat_id,
+        message_id=message_id,
+    )
 
 
 async def _has_manual_outgoing_after(
@@ -1518,22 +1536,12 @@ async def _has_manual_outgoing_after(
     message_id: int,
     message_ts: int = 0,
 ) -> bool:
-    redis = await _get_redis()
-    try:
-        raw = await redis.get(_manual_outgoing_key(user_id, chat_id))
-    finally:
-        await redis.aclose()
-    if not raw:
-        return False
-    try:
-        data = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return False
-    outgoing_id = _coerce_int(data.get("message_id"))
-    if outgoing_id is not None and outgoing_id > message_id:
-        return True
-    outgoing_ts = _coerce_int(data.get("ts"))
-    return bool(outgoing_ts and message_ts and outgoing_ts > message_ts)
+    return await has_cached_manual_outgoing_after(
+        user_id=user_id,
+        chat_id=chat_id,
+        message_id=message_id,
+        message_ts=message_ts,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1576,6 +1584,13 @@ async def _classify_incoming_message(
         "memory_items": [],
         "chat_type": chat_type,
     }
+
+
+def _classification_requires_response(classification: dict) -> bool:
+    raw = classification.get("requires_response", True)
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"false", "0", "no", "нет"}
+    return bool(raw)
 
 
 async def _persist_incoming_thread(
