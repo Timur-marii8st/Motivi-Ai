@@ -52,9 +52,10 @@ class UserBotThreadService:
         conversation_summary: str | None = None,
     ) -> dict[str, Any]:
         fallback = {
-            "requires_response": True,
-            "importance": 3,
-            "suggested_followup_at": self._default_deadline().isoformat(),
+            "classification_available": False,
+            "requires_response": False,
+            "importance": 1,
+            "suggested_followup_at": None,
             "memory_worthy": False,
             "memory_items": [],
             "message_summary": message_text[:240],
@@ -105,6 +106,7 @@ class UserBotThreadService:
             )
             raw = response.choices[0].message.content or "{}"
             data = json.loads(_clean_json(raw))
+            data["classification_available"] = True
             data["requires_response"] = bool(
                 data.get("requires_response", fallback["requires_response"])
             )

@@ -60,6 +60,30 @@ class _FakeSession:
         self.added.append(item)
 
 
+def test_classifier_failure_does_not_create_a_reply_obligation():
+    service = UserBotThreadService()
+    service.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(side_effect=RuntimeError("provider unavailable"))
+            )
+        )
+    )
+
+    result = asyncio.run(
+        service.classify_message(
+            message_text="Can you send this today?",
+            sender_name="Alex",
+            chat_type="dm",
+        )
+    )
+
+    assert result["classification_available"] is False
+    assert result["requires_response"] is False
+    assert result["importance"] == 1
+    assert result["suggested_followup_at"] is None
+
+
 def test_create_or_update_incoming_persists_summary_without_raw_text():
     service = UserBotThreadService()
     session = _FakeSession()

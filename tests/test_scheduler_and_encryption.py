@@ -159,27 +159,42 @@ def test_cleanup_expired_memories_job_basic_flow(monkeypatch):
     """cleanup_expired_memories_job РІС‹РїРѕР»РЅСЏРµС‚ select/ delete / commit РїСЂРё РЅР°Р»РёС‡РёРё СѓСЃС‚Р°СЂРµРІС€РёС… СЃСѓС‰РЅРѕСЃС‚РµР№."""
     fake_session = AsyncMock()
 
-    first_result = MagicMock()
-    first_result.all.return_value = [(1,), (2,)]  # Episode ids
+    episode_ids = MagicMock()
+    episode_ids.all.return_value = [(1,), (2,)]
+    stale_working_memory = MagicMock()
+    stale_working_memory.all.return_value = [(10, 7)]
+    execute_result = MagicMock()
 
-    second_result = MagicMock()
-    second_result.all.return_value = [(10,)]  # WorkingMemory ids
-
-    # Р”РѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚, С‡С‚РѕР±С‹ РЅРµ СЃР»РѕРІРёС‚СЊ StopIteration РїСЂРё Р»РёС€РЅРёС… execute
-    third_result = MagicMock()
-    third_result.all.return_value = []
-
-    fake_session.execute = AsyncMock(side_effect=[first_result, second_result, third_result])
+    fake_session.execute = AsyncMock(
+        side_effect=[
+            episode_ids,
+            execute_result,
+            execute_result,
+            stale_working_memory,
+            execute_result,
+            execute_result,
+        ]
+    )
     fake_session.close = AsyncMock()
+    signer = MagicMock(return_value="signed")
 
     monkeypatch.setattr("app.scheduler.jobs.AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(
+        "app.scheduler.jobs.calculate_integrity_signature",
+        signer,
+    )
 
     asyncio.run(cleanup_expired_memories_job())
 
     # Р”РѕР»Р¶РЅРѕ Р±С‹С‚СЊ РјРёРЅРёРјСѓРј РґРІР° РІС‹Р·РѕРІР° execute (СЌРїРёР·РѕРґС‹ + СЂР°Р±РѕС‡Р°СЏ РїР°РјСЏС‚СЊ)
-    assert fake_session.execute.await_count >= 2
+    assert fake_session.execute.await_count == 6
     # commit РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІС‹Р·РІР°РЅ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ СЂР°Р·
-    assert fake_session.commit.await_count >= 1
+    assert fake_session.commit.await_count == 2
+    signer.assert_called_once_with(
+        "working_memory",
+        7,
+        {"working_memory_text": None},
+    )
 
 
 # ======================================================================

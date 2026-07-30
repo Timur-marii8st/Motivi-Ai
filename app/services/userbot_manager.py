@@ -17,6 +17,7 @@ Design decisions
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Optional
 
 from loguru import logger
@@ -35,6 +36,14 @@ _pending: dict[int, dict] = {}
 
 
 class UserBotManager:
+    @staticmethod
+    async def is_client_connected(client: TelegramClient) -> bool:
+        """Probe connectivity without awaiting Telethon's synchronous method."""
+        result = client.is_connected()
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
+
     # ------------------------------------------------------------------ #
     # Startup / shutdown                                                   #
     # ------------------------------------------------------------------ #
@@ -104,7 +113,7 @@ class UserBotManager:
         existing = _clients.get(user_id)
         if existing is not None:
             try:
-                if await existing.is_connected():
+                if await UserBotManager.is_client_connected(existing):
                     logger.info("Userbot client for user {} is already connected", user_id)
                     return
             except Exception:

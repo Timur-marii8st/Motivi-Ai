@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import inspect
-import json
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -90,7 +89,7 @@ class MemoryOrchestrator:
 
     @staticmethod
     async def _call_retrieve_similar(fn, *args, query_text: str, top_k: int = 5, query_vec=None):
-        kwargs = {"query_text": query_text}
+        kwargs: dict[str, Any] = {"query_text": query_text}
         signature = inspect.signature(fn)
         if "top_k" in signature.parameters:
             kwargs["top_k"] = top_k
@@ -114,29 +113,46 @@ class MemoryOrchestrator:
             query_text, task_type="retrieval_query"
         )
 
-        similar_core_facts = await self._call_retrieve_similar(
-            self.core_service.retrieve_similar,
-            session,
-            user.id,
-            query_text=query_text,
-            top_k=top_k,
-            query_vec=query_vec,
-        )
-        working_results = await self._call_retrieve_similar(
-            self.working_service.retrieve_similar,
-            session,
-            user.id,
-            query_text=query_text,
-            query_vec=query_vec,
-        )
-        episodes = await self._call_retrieve_similar(
-            self.episodic_service.retrieve_similar,
-            session,
-            user.id,
-            query_text=query_text,
-            top_k=top_k,
-            query_vec=query_vec,
-        )
+        if query_vec:
+            similar_core_facts = await self._call_retrieve_similar(
+                self.core_service.retrieve_similar,
+                session,
+                user.id,
+                query_text=query_text,
+                top_k=top_k,
+                query_vec=query_vec,
+            )
+            working_results = await self._call_retrieve_similar(
+                self.working_service.retrieve_similar,
+                session,
+                user.id,
+                query_text=query_text,
+                query_vec=query_vec,
+            )
+            episodes = await self._call_retrieve_similar(
+                self.episodic_service.retrieve_similar,
+                session,
+                user.id,
+                query_text=query_text,
+                top_k=top_k,
+                query_vec=query_vec,
+            )
+        else:
+            logger.warning(
+                "Embedding retrieval unavailable for user {}; using recent memory fallback",
+                user.id,
+            )
+            similar_core_facts = await self.core_service.list_facts_for_user(
+                session,
+                user.id,
+                limit=top_k,
+            )
+            working_results = []
+            episodes = await self.episodic_service.get_recent_episodes(
+                session,
+                user.id,
+                limit=top_k,
+            )
         working_history_result = await session.execute(
             select(WorkingMemoryEntry)
             .where(WorkingMemoryEntry.user_id == user.id)

@@ -1,4 +1,3 @@
-import json
 import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -6,7 +5,6 @@ from dataclasses import dataclass
 
 from app.services.memory_orchestrator import MemoryPack
 from app.services.core_memory_service import CoreMemoryService
-from app.models.core_memory import CoreFact, CoreFactEmbedding
 
 
 @dataclass
@@ -286,3 +284,72 @@ def test_memory_orchestrator_assemble_passes_core_facts(monkeypatch):
     pack = asyncio.run(mo.assemble(fake_session, user, "Hi"))
     assert isinstance(pack.core_facts, list)
     assert pack.core_facts[0].fact_text == "Important fact"
+
+
+def test_memory_orchestrator_falls_back_to_recent_memory_without_embeddings():
+    from app.services.memory_orchestrator import MemoryOrchestrator
+
+    now = datetime.now(timezone.utc)
+    fact = FakeCoreFact(
+        id=1,
+        core_memory_id=1,
+        fact_text="Recent important fact",
+        created_at=now,
+    )
+    episode = FakeEpisode(id=1, user_id=1, text="Recent episode", created_at=now)
+    core = FakeCore(id=1, user_id=1, core_text=None, created_at=now)
+    working = FakeWorking(
+        id=1,
+        user_id=1,
+        working_memory_text="Current context",
+        created_at=now,
+    )
+
+    core_service = MagicMock()
+    core_service.embeddings.embed = AsyncMock(return_value=[])
+    core_service.list_facts_for_user = AsyncMock(return_value=[fact])
+    core_service.get_or_create = AsyncMock(return_value=core)
+    core_service.retrieve_similar = AsyncMock()
+
+    working_service = MagicMock()
+    working_service.retrieve_similar = AsyncMock()
+    working_service.get_or_create = AsyncMock(return_value=working)
+
+    episodic_service = MagicMock()
+    episodic_service.retrieve_similar = AsyncMock()
+    episodic_service.get_recent_episodes = AsyncMock(return_value=[episode])
+
+    history_result = MagicMock()
+    history_result.scalars.return_value.all.return_value = []
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=history_result)
+    user = FakeUser(
+        id=1,
+        name="Test",
+        age=30,
+        user_timezone="UTC",
+        wake_time=None,
+        bed_time=None,
+        occupation_json=None,
+    )
+
+    pack = asyncio.run(
+        MemoryOrchestrator(
+            episodic_service=episodic_service,
+            core_service=core_service,
+            working_service=working_service,
+        ).assemble(session, user, "Hi", top_k=5)
+    )
+
+    assert pack.core_facts == [fact]
+    assert pack.episodes == [episode]
+    assert pack.working is working
+    core_service.list_facts_for_user.assert_awaited_once_with(session, 1, limit=5)
+    episodic_service.get_recent_episodes.assert_awaited_once_with(
+        session,
+        1,
+        limit=5,
+    )
+    core_service.retrieve_similar.assert_not_awaited()
+    working_service.retrieve_similar.assert_not_awaited()
+    episodic_service.retrieve_similar.assert_not_awaited()

@@ -162,6 +162,7 @@ def test_check_if_message_read_uses_live_dialog_cursor(monkeypatch):
 
 
 def test_classification_requires_response_normalizes_string_false():
+    assert not userbot_monitor._classification_requires_response({})
     assert not userbot_monitor._classification_requires_response(
         {"requires_response": "false"}
     )
@@ -171,6 +172,17 @@ def test_classification_requires_response_normalizes_string_false():
     assert userbot_monitor._classification_requires_response(
         {"requires_response": "yes"}
     )
+
+
+def test_unavailable_classification_fails_closed():
+    classification = {
+        "classification_available": False,
+        "requires_response": False,
+        "importance": 1,
+    }
+
+    assert not userbot_monitor._classification_available(classification)
+    assert not userbot_monitor._classification_requires_response(classification)
 
 
 def test_auto_reminder_steps_are_hidden_after_execution(monkeypatch):

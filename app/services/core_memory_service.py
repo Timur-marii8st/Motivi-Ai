@@ -1,9 +1,8 @@
 from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
-from ..models.core_memory import CoreMemory, CoreEmbedding, CoreFact, CoreFactEmbedding
+from ..models.core_memory import CoreMemory, CoreFact, CoreFactEmbedding
 from datetime import datetime, timezone
-import json
 from typing import Optional
 from loguru import logger
 from ..embeddings.gemini_embedding_client import GeminiEmbeddings
@@ -127,8 +126,20 @@ class CoreMemoryService:
         rows = result.scalars().all()
         return list(rows)
 
-    async def list_facts_for_user(self, session: AsyncSession, user_id: int) -> List[CoreFact]:
-        """Return all core facts for a given user."""
-        stmt = select(CoreFact).join(CoreMemory, CoreMemory.id == CoreFact.core_memory_id).where(CoreMemory.user_id == user_id)
+    async def list_facts_for_user(
+        self,
+        session: AsyncSession,
+        user_id: int,
+        limit: int | None = None,
+    ) -> List[CoreFact]:
+        """Return the user's newest core facts, optionally capped."""
+        stmt = (
+            select(CoreFact)
+            .join(CoreMemory, CoreMemory.id == CoreFact.core_memory_id)
+            .where(CoreMemory.user_id == user_id)
+            .order_by(CoreFact.created_at.desc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await session.execute(stmt)
         return result.scalars().all()

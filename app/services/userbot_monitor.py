@@ -531,6 +531,12 @@ async def _process_dm_debounced(
             chat_type="dm",
             conversation_thread=thread,
         )
+        if not _classification_available(classification):
+            logger.warning(
+                "Userbot: skipping DM for user {} - classifier unavailable",
+                user_id,
+            )
+            return
         summary = classification.get("summary") or _short_summary(text)
         if not _classification_requires_response(classification):
             await _persist_incoming_thread(
@@ -638,10 +644,13 @@ async def _process_dm_debounced(
             f"━━━━━━━━━━━━\n"
             f"<i>{_esc(preview)}</i>\n"
             f"━━━━━━━━━━━━\n"
-            f"💡 <b>Suggested replies:</b>\n"
         )
-        for i, s in enumerate(suggestions, 1):
-            notification += f"{i}️⃣ {_esc(s)}\n"
+        if suggestions:
+            notification += "💡 <b>Suggested replies:</b>\n"
+            for i, suggestion in enumerate(suggestions, 1):
+                notification += f"{i}️⃣ {_esc(suggestion)}\n"
+        else:
+            notification += "⚠️ Reply suggestions are temporarily unavailable.\n"
         if action_plan:
             notification += _format_action_plan_for_notification(action_plan)
 
@@ -912,6 +921,12 @@ async def _process_group_debounced(
             chat_type="group",
             conversation_thread=thread,
         )
+        if not _classification_available(classification):
+            logger.warning(
+                "Userbot: skipping group notification for user {} - classifier unavailable",
+                user_id,
+            )
+            return
         summary = classification.get("summary") or _short_summary(text)
         if not _classification_requires_response(classification):
             await _persist_incoming_thread(
@@ -1020,10 +1035,13 @@ async def _process_group_debounced(
             f"━━━━━━━━━━━━\n"
             f"<i>{_esc(preview)}</i>\n"
             f"━━━━━━━━━━━━\n"
-            f"💡 <b>Suggested replies:</b>\n"
         )
-        for i, s in enumerate(suggestions, 1):
-            notification += f"{i}️⃣ {_esc(s)}\n"
+        if suggestions:
+            notification += "💡 <b>Suggested replies:</b>\n"
+            for i, suggestion in enumerate(suggestions, 1):
+                notification += f"{i}️⃣ {_esc(suggestion)}\n"
+        else:
+            notification += "⚠️ Reply suggestions are temporarily unavailable.\n"
         if action_plan:
             notification += _format_action_plan_for_notification(action_plan)
 
@@ -1576,9 +1594,10 @@ async def _classify_incoming_message(
         logger.debug("Userbot thread classifier failed for user {}: {}", user_id, exc)
 
     return {
+        "classification_available": False,
         "summary": _short_summary(text),
-        "importance": 3,
-        "requires_response": True,
+        "importance": 1,
+        "requires_response": False,
         "suggested_followup_at": None,
         "memory_worthy": False,
         "memory_items": [],
@@ -1586,8 +1605,12 @@ async def _classify_incoming_message(
     }
 
 
+def _classification_available(classification: dict) -> bool:
+    return classification.get("classification_available", True) is not False
+
+
 def _classification_requires_response(classification: dict) -> bool:
-    raw = classification.get("requires_response", True)
+    raw = classification.get("requires_response", False)
     if isinstance(raw, str):
         return raw.strip().lower() not in {"false", "0", "no", "нет"}
     return bool(raw)
@@ -2669,7 +2692,7 @@ async def _generate_reply_suggestions(
     Uses rich context: user profile, communication style samples,
     conversation history, and sender relationship.
     """
-    _fallback = ["Got it, thanks!", "Sure, I'll get back to you.", "Sounds good!"]
+    _fallback: list[str] = []
     try:
         # --- Build the system prompt ---
         system_parts = [

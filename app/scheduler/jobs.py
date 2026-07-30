@@ -4,7 +4,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select, delete
+from sqlmodel import select, delete, update
 
 from ..db import AsyncSessionLocal
 from ..bot.bot_provider import get_bot_instance
@@ -16,6 +16,7 @@ from ..models.working_memory import WorkingMemory, WorkingEmbedding
 from ..services.proactive_flows import ProactiveFlows
 from ..models.user_trigger import UserTrigger
 from ..config import settings
+from ..security.row_integrity import calculate_integrity_signature
 from ..utils.telegram_topics import topic_kwargs_for_user
 
 
@@ -324,11 +325,23 @@ async def cleanup_expired_memories_job():
         if stale_wm:
             stale_wm_ids = [wm_id for wm_id, _ in stale_wm]
             await session.execute(delete(WorkingEmbedding).where(WorkingEmbedding.working_memory_id.in_(stale_wm_ids)))
-            from sqlalchemy import update
-            await session.execute(
-                update(WorkingMemory).where(WorkingMemory.id.in_(stale_wm_ids))
-                .values(working_memory_text=None, decay_date=None)
-            )
+            now = datetime.now(timezone.utc)
+            for wm_id, user_id in stale_wm:
+                integrity_sig = calculate_integrity_signature(
+                    WorkingMemory.__tablename__,
+                    int(user_id),
+                    {"working_memory_text": None},
+                )
+                await session.execute(
+                    update(WorkingMemory.__table__)
+                    .where(WorkingMemory.__table__.c.id == wm_id)
+                    .values(
+                        working_memory_text=None,
+                        decay_date=None,
+                        updated_at=now,
+                        integrity_sig=integrity_sig,
+                    )
+                )
             await session.commit()
             logger.info("Cleared {} stale working memories (preserved records)", len(stale_wm_ids))
         else:
@@ -444,7 +457,7 @@ async def userbot_health_check_job():
             is_connected = False
             if client:
                 try:
-                    is_connected = await client.is_connected()
+                    is_connected = await UserBotManager.is_client_connected(client)
                 except Exception:
                     pass
 

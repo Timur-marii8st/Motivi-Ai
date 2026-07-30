@@ -208,7 +208,11 @@ class JobManager:
 
         scheduler.add_job(
             func="app.scheduler.jobs:userbot_health_check_job",
-            trigger=IntervalTrigger(minutes=10, timezone=timezone.utc),
+            trigger=IntervalTrigger(
+                minutes=10,
+                start_date=datetime.now(timezone.utc) + timedelta(minutes=2),
+                timezone=timezone.utc,
+            ),
             id="userbot_health_check",
             replace_existing=True,
         )

@@ -59,6 +59,15 @@ def _compute_signature(table_name: str, owner_id: int, fields: dict[str, Any]) -
     return hmac.new(_INTEGRITY_KEY, message, hashlib.sha256).hexdigest()
 
 
+def calculate_integrity_signature(
+    table_name: str,
+    owner_id: int,
+    fields: dict[str, Any],
+) -> str:
+    """Calculate a signature for explicit SQL updates that bypass ORM hooks."""
+    return _compute_signature(table_name, owner_id, fields)
+
+
 _TRACKED_MODELS: dict[type, tuple[OwnerGetter, tuple[str, ...]]] = {
     User: (lambda obj: obj.tg_user_id, ("name", "occupation_json")),
     CoreMemory: (lambda obj: obj.user_id, ("core_text", "sleep_schedule_json")),
@@ -96,7 +105,7 @@ def _verify_instance(instance: Any) -> None:
     if not current_sig:
         if settings.INTEGRITY_STRICT_MODE:
             logger.error(
-                "Missing integrity signature for %s id=%s in strict mode",
+                "Missing integrity signature for {} id={} in strict mode",
                 instance.__tablename__,
                 getattr(instance, "id", None),
             )
@@ -113,7 +122,7 @@ def _verify_instance(instance: Any) -> None:
     current = str(current_sig)
     if not hmac.compare_digest(expected, current):
         logger.error(
-            "Integrity signature mismatch for %s id=%s owner=%s",
+            "Integrity signature mismatch for {} id={} owner={}",
             instance.__tablename__,
             getattr(instance, "id", None),
             owner_id,
