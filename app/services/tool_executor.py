@@ -13,6 +13,7 @@ from ..utils.telegram_topics import topic_kwargs_for_user
 if TYPE_CHECKING:
     from aiogram import Bot
 
+
 class ToolExecutor:
     def __init__(self, session: AsyncSession, bot: Bot | None = None):
         self.session = session
@@ -20,14 +21,18 @@ class ToolExecutor:
 
     def _require_bot(self) -> Bot:
         if self.bot is None:
-            raise RuntimeError("ToolExecutor requires bot instance for Telegram send operations")
+            raise RuntimeError(
+                "ToolExecutor requires bot instance for Telegram send operations"
+            )
         return self.bot
 
     async def _topic_kwargs(self, user_id: int) -> dict[str, int]:
         user = await self.session.get(User, user_id)
         return topic_kwargs_for_user(user) if user else {}
 
-    async def execute(self, tool_name: str, args: Dict[str, Any], chat_id: int, user_id: int) -> Dict[str, Any]:
+    async def execute(
+        self, tool_name: str, args: Dict[str, Any], chat_id: int, user_id: int
+    ) -> Dict[str, Any]:
         """
         Route tool call to appropriate handler.
         """
@@ -48,6 +53,10 @@ class ToolExecutor:
                 return await self._create_calendar_event(args, user_id)
             elif tool_name == "check_calendar_availability":
                 return await self._check_availability(args, user_id)
+            elif tool_name == "list_my_calendar":
+                return await self._list_my_calendar(user_id)
+            elif tool_name == "add_calendar_event":
+                return await self._add_calendar_event(args, user_id)
             elif tool_name == "execute_code":
                 return await self._execute_code(args, chat_id, user_id)
             elif tool_name == "load_skill":
@@ -65,10 +74,10 @@ class ToolExecutor:
         """Create calendar event."""
         from ..integrations.google_calendar import GoogleCalendarService
         from datetime import datetime
-        
+
         start_dt = datetime.fromisoformat(args["start_datetime"])
         end_dt = datetime.fromisoformat(args["end_datetime"])
-        
+
         event_id = await GoogleCalendarService.create_event(
             self.session,
             user_id,
@@ -77,7 +86,7 @@ class ToolExecutor:
             end_dt=end_dt,
             description=args.get("description"),
         )
-        
+
         if event_id:
             return {"success": True, "event_id": event_id}
         else:
@@ -86,16 +95,87 @@ class ToolExecutor:
     async def _check_availability(self, args: Dict, user_id: int) -> Dict:
         """Check calendar availability."""
         from ..integrations.google_calendar import GoogleCalendarService
-        from datetime import datetime, timezone
-        
+        from datetime import datetime
+
         start_dt = datetime.fromisoformat(args["start_datetime"])
         end_dt = datetime.fromisoformat(args["end_datetime"])
-        
+
         available = await GoogleCalendarService.check_availability(
             self.session, user_id, start_dt, end_dt
         )
-        
+
         return {"success": True, "available": available}
+
+    async def _list_my_calendar(self, user_id: int) -> Dict:
+        """List upcoming events from Motivi's internal calendar."""
+        from ..services.calendar_service import CalendarService, format_local
+
+        user = await self.session.get(User, user_id)
+        tzname = (user.user_timezone if user else None) or "UTC"
+
+        events = await CalendarService.list_upcoming(self.session, user_id, days=7)
+        items = [
+            {
+                "event_id": event.id,
+                "title": event.title,
+                "starts_at_utc": event.starts_at.isoformat(),
+                "starts_at_local": format_local(event.starts_at, tzname),
+                "source_type": event.source_type,
+                "source_name": event.source_name,
+            }
+            for event in events
+        ]
+        return {
+            "success": True,
+            "events": items,
+            "count": len(items),
+            "timezone": tzname,
+        }
+
+    async def _add_calendar_event(self, args: Dict, user_id: int) -> Dict:
+        """Add an event to Motivi's internal calendar with an automatic reminder."""
+        from ..services.calendar_service import (
+            CalendarService,
+            format_local,
+            parse_iso_to_utc,
+        )
+
+        user = await self.session.get(User, user_id)
+        tzname = (user.user_timezone if user else None) or "UTC"
+
+        starts_at = parse_iso_to_utc(str(args.get("start_datetime_iso") or ""), tzname)
+        if starts_at is None:
+            return {"success": False, "error": "Invalid start_datetime_iso"}
+        ends_at = parse_iso_to_utc(str(args.get("end_datetime_iso") or ""), tzname)
+
+        remind_before = args.get("remind_before_minutes")
+        try:
+            remind_before = int(remind_before) if remind_before is not None else None
+        except (TypeError, ValueError):
+            remind_before = None
+
+        event = await CalendarService.create_event(
+            self.session,
+            user_id=user_id,
+            title=str(args.get("title") or ""),
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=args.get("description"),
+            source_type="chat",
+            remind_before_minutes=remind_before,
+        )
+        if not event:
+            return {
+                "success": False,
+                "error": "Event was not created (past time or duplicate). "
+                "Provide a future datetime.",
+            }
+        return {
+            "success": True,
+            "event_id": event.id,
+            "starts_at_local": format_local(event.starts_at, tzname),
+            "timezone": tzname,
+        }
 
     async def _schedule_reminder(self, args: Dict, chat_id: int, user_id: int) -> Dict:
         """Schedule a one-off Telegram reminder for the user via APScheduler."""
@@ -110,9 +190,9 @@ class ToolExecutor:
         iso_str = args["reminder_datetime_iso"]
         if iso_str.endswith("Z"):
             iso_str = iso_str[:-1] + "+00:00"
-        
+
         reminder_dt = datetime.fromisoformat(iso_str)
-        
+
         # Timezone priority:
         # 1) Explicit tool arg (if provided)
         # 2) User profile timezone
@@ -127,10 +207,10 @@ class ToolExecutor:
         except Exception as e:
             logger.error("Failed to get user timezone for user {}: {}", user_id, e)
             tzname = "UTC"
-        
+
         # Convert local time to UTC
         now_utc = datetime.now(_utc)
-        
+
         if reminder_dt.tzinfo is None:
             # Naive datetime - interpret as local time in user's timezone
             try:
@@ -140,36 +220,48 @@ class ToolExecutor:
                 # Convert to UTC for scheduling
                 reminder_dt_utc = reminder_dt_local.astimezone(_utc)
             except Exception as e:
-                logger.error("Failed to convert timezone {} for user {}: {}", tzname, user_id, e)
+                logger.error(
+                    "Failed to convert timezone {} for user {}: {}", tzname, user_id, e
+                )
                 return {"success": False, "error": f"Invalid timezone: {tzname}"}
         else:
             # Already timezone-aware, convert to UTC
             reminder_dt_utc = reminder_dt.astimezone(_utc)
             reminder_dt_local = reminder_dt
-        
+
         # Do not allow scheduling reminders in the past
         if reminder_dt_utc <= now_utc:
-            logger.warning("Attempted to schedule reminder in the past: {} UTC (now={})", reminder_dt_utc, now_utc)
-            return {"success": False, "error": "Cannot schedule a reminder in the past. Please provide a future time."}
-        
+            logger.warning(
+                "Attempted to schedule reminder in the past: {} UTC (now={})",
+                reminder_dt_utc,
+                now_utc,
+            )
+            return {
+                "success": False,
+                "error": "Cannot schedule a reminder in the past. Please provide a future time.",
+            }
+
         # Generate unique job_id
         unique_id = str(uuid.uuid4())[:8]
         job_id = f"reminder_{user_id}_{unique_id}"
-        
+
         # Check if job already exists and remove it
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
-        
+
         from apscheduler.triggers.date import DateTrigger
+
         # Ensure the scheduler is running
         try:
             if not scheduler.running:
                 start_scheduler()
         except Exception:
-            logger.debug("Could not ensure scheduler was running when scheduling reminder")
-        
+            logger.debug(
+                "Could not ensure scheduler was running when scheduling reminder"
+            )
+
         trigger = DateTrigger(run_date=reminder_dt_utc, timezone=_utc)
-        
+
         scheduler.add_job(
             func="app.scheduler.jobs:send_one_off_reminder_job",
             trigger=trigger,
@@ -177,14 +269,23 @@ class ToolExecutor:
             args=[user_id, chat_id, args["message_text"]],
             replace_existing=True,
         )
-        
+
         # Build human-friendly time info
         scheduled_utc_iso = reminder_dt_utc.isoformat()
-        scheduled_local_iso = reminder_dt_local.isoformat() if 'reminder_dt_local' in locals() else scheduled_utc_iso
-        
-        logger.info("Scheduled reminder for user {} at {} UTC ({} local in {})", 
-                   user_id, reminder_dt_utc, reminder_dt_local if 'reminder_dt_local' in locals() else 'N/A', tzname)
-        
+        scheduled_local_iso = (
+            reminder_dt_local.isoformat()
+            if "reminder_dt_local" in locals()
+            else scheduled_utc_iso
+        )
+
+        logger.info(
+            "Scheduled reminder for user {} at {} UTC ({} local in {})",
+            user_id,
+            reminder_dt_utc,
+            reminder_dt_local if "reminder_dt_local" in locals() else "N/A",
+            tzname,
+        )
+
         return {
             "success": True,
             "job_id": job_id,
@@ -196,19 +297,26 @@ class ToolExecutor:
     async def _cancel_reminder(self, args: Dict, user_id: int) -> Dict:
         """Cancel a scheduled reminder by job_id."""
         from ..scheduler.scheduler_instance import scheduler
-        
+
         job_id = args["job_id"]
-        
+
         # Validate that the job_id belongs to this user
         if not job_id.startswith(f"reminder_{user_id}_"):
-            logger.warning("User {} attempted to cancel reminder from different user: {}", user_id, job_id)
-            return {"success": False, "error": "Cannot cancel reminder from another user"}
-        
+            logger.warning(
+                "User {} attempted to cancel reminder from different user: {}",
+                user_id,
+                job_id,
+            )
+            return {
+                "success": False,
+                "error": "Cannot cancel reminder from another user",
+            }
+
         job = scheduler.get_job(job_id)
         if not job:
             logger.warning("Attempted to cancel non-existent reminder: {}", job_id)
             return {"success": False, "error": "Reminder not found"}
-        
+
         scheduler.remove_job(job_id)
         logger.info("Cancelled reminder for user {} (job_id={})", user_id, job_id)
         return {"success": True}
@@ -217,17 +325,17 @@ class ToolExecutor:
         """List all active reminders for the user."""
         from ..scheduler.scheduler_instance import scheduler
         from datetime import datetime
-        from pytz import utc
-        
+
         # Get all jobs for this user
         prefix = f"reminder_{user_id}_"
         user_jobs = [job for job in scheduler.get_jobs() if job.id.startswith(prefix)]
-        
+
         reminders = []
         from datetime import timezone as _dt_timezone
+
         for job in user_jobs:
             # Extract reminder details from job
-            if job.trigger and hasattr(job.trigger, 'run_date'):
+            if job.trigger and hasattr(job.trigger, "run_date"):
                 run_date = job.trigger.run_date
                 # Convert to ISO format if it's a datetime
                 if isinstance(run_date, datetime):
@@ -239,13 +347,14 @@ class ToolExecutor:
                     run_date_iso = str(run_date)
             else:
                 run_date_iso = "Unknown"
-            
+
             # Extract message text from job args (format: [user_id, chat_id, message_text])
             message_text = job.args[2] if len(job.args) > 2 else "No message"
             # Fetch user's configured timezone (falls back to UTC)
             user_tz = None
             try:
                 from ..models.users import User
+
                 user_obj = await self.session.get(User, user_id)
                 user_tz = getattr(user_obj, "user_timezone", None)
             except Exception:
@@ -256,20 +365,25 @@ class ToolExecutor:
                 try:
                     if user_tz:
                         from zoneinfo import ZoneInfo
-                        scheduled_for_local = run_date.astimezone(ZoneInfo(user_tz)).isoformat()
+
+                        scheduled_for_local = run_date.astimezone(
+                            ZoneInfo(user_tz)
+                        ).isoformat()
                     else:
                         scheduled_for_local = run_date_iso
                 except Exception:
                     scheduled_for_local = run_date_iso
 
-            reminders.append({
-                "job_id": job.id,
-                "message": message_text,
-                "scheduled_for": run_date_iso,
-                "scheduled_for_local": scheduled_for_local,
-                "timezone": user_tz or "UTC",
-            })
-        
+            reminders.append(
+                {
+                    "job_id": job.id,
+                    "message": message_text,
+                    "scheduled_for": run_date_iso,
+                    "scheduled_for_local": scheduled_for_local,
+                    "timezone": user_tz or "UTC",
+                }
+            )
+
         logger.info("Listed {} active reminders for user {}", len(reminders), user_id)
         return {"success": True, "reminders": reminders, "count": len(reminders)}
 
@@ -281,7 +395,10 @@ class ToolExecutor:
         # Validate plan level
         if plan_level not in ["daily", "weekly", "monthly"]:
             logger.warning("Invalid plan_level: {}", plan_level)
-            return {"success": False, "error": f"Invalid plan level. Must be one of: daily, weekly, monthly"}
+            return {
+                "success": False,
+                "error": "Invalid plan level. Must be one of: daily, weekly, monthly",
+            }
 
         try:
             # Create plan record in database
@@ -306,10 +423,16 @@ class ToolExecutor:
                 "monthly": "на месяц",
             }.get(plan_level, "")
 
-            message = f"📋 <b>Твой план {duration_text}:</b>\n\n{html.escape(plan_content)}"
-            await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
+            message = (
+                f"📋 <b>Твой план {duration_text}:</b>\n\n{html.escape(plan_content)}"
+            )
+            await bot.send_message(
+                chat_id, message, **await self._topic_kwargs(user_id)
+            )
 
-            logger.info("Created {} plan for user {} (plan_id={})", plan_level, user_id, plan.id)
+            logger.info(
+                "Created {} plan for user {} (plan_id={})", plan_level, user_id, plan.id
+            )
             return {"success": True, "plan_id": plan.id}
 
         except Exception as e:
@@ -332,23 +455,35 @@ class ToolExecutor:
                     Plan.content,
                     Plan.created_at,
                     Plan.expires_at,
-                ).where(
+                )
+                .where(
                     Plan.user_id == user_id,
                     Plan.expires_at > datetime.now(timezone.utc),
-                ).order_by(Plan.created_at.desc())
+                )
+                .order_by(Plan.created_at.desc())
             )
 
             rows = result.all()
             plans = []
 
             for plan_id, plan_level, content, created_at, expires_at in rows:
-                plans.append({
-                    "plan_id": plan_id,
-                    "plan_level": plan_level,
-                    "content": content,
-                    "created_at": created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
-                    "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else str(expires_at),
-                })
+                plans.append(
+                    {
+                        "plan_id": plan_id,
+                        "plan_level": plan_level,
+                        "content": content,
+                        "created_at": (
+                            created_at.isoformat()
+                            if isinstance(created_at, datetime)
+                            else str(created_at)
+                        ),
+                        "expires_at": (
+                            expires_at.isoformat()
+                            if isinstance(expires_at, datetime)
+                            else str(expires_at)
+                        ),
+                    }
+                )
 
             logger.info("Retrieved {} active plans for user {}", len(plans), user_id)
             return {"success": True, "plans": plans, "count": len(plans)}
@@ -377,12 +512,16 @@ class ToolExecutor:
             plan = result.scalar_one_or_none()
 
             if not plan:
-                logger.warning("User {} attempted to edit non-existent plan: {}", user_id, plan_id)
+                logger.warning(
+                    "User {} attempted to edit non-existent plan: {}", user_id, plan_id
+                )
                 return {"success": False, "error": "Plan not found"}
 
             # Check if plan has expired
             if plan.is_expired():
-                logger.warning("User {} attempted to edit expired plan: {}", user_id, plan_id)
+                logger.warning(
+                    "User {} attempted to edit expired plan: {}", user_id, plan_id
+                )
                 return {"success": False, "error": "Plan has expired"}
 
             # Update plan content
@@ -391,7 +530,9 @@ class ToolExecutor:
             # Extend expiry if requested
             if extend_expiry:
                 plan.expires_at = Plan.calculate_expiry(plan.plan_level)
-                logger.info("Extended expiry for plan {} to {}", plan_id, plan.expires_at)
+                logger.info(
+                    "Extended expiry for plan {} to {}", plan_id, plan.expires_at
+                )
 
             self.session.add(plan)
             # Don't commit here - let middleware handle transaction
@@ -407,13 +548,19 @@ class ToolExecutor:
             }.get(plan.plan_level, "")
 
             message = f"✏️ <b>Обновленный план {duration_text}:</b>\n\n{html.escape(plan_content)}"
-            await bot.send_message(chat_id, message, **await self._topic_kwargs(user_id))
+            await bot.send_message(
+                chat_id, message, **await self._topic_kwargs(user_id)
+            )
 
             logger.info("Edited plan {} for user {}", plan_id, user_id)
             return {
                 "success": True,
                 "plan_id": plan.id,
-                "expires_at": plan.expires_at.isoformat() if isinstance(plan.expires_at, datetime) else str(plan.expires_at),
+                "expires_at": (
+                    plan.expires_at.isoformat()
+                    if isinstance(plan.expires_at, datetime)
+                    else str(plan.expires_at)
+                ),
             }
 
         except Exception as e:
@@ -500,16 +647,21 @@ class ToolExecutor:
         # Send any output files directly to the user via Telegram
         if result.output_files:
             from aiogram.types import BufferedInputFile
+
             bot = self._require_bot()
             sent_files: list[str] = []
             failed_files: list[str] = []
             topic_kwargs = topic_kwargs_for_user(user)
             for fname, fdata in result.output_files:
                 from pathlib import Path
+
                 ext = Path(fname).suffix.lower()
                 try:
                     input_file = BufferedInputFile(fdata, filename=fname)
-                    if ext in _IMAGE_EXTENSIONS and len(fdata) < _TELEGRAM_PHOTO_MAX_BYTES:
+                    if (
+                        ext in _IMAGE_EXTENSIONS
+                        and len(fdata) < _TELEGRAM_PHOTO_MAX_BYTES
+                    ):
                         await bot.send_photo(chat_id, input_file, **topic_kwargs)
                     else:
                         await bot.send_document(chat_id, input_file, **topic_kwargs)
@@ -540,7 +692,12 @@ class ToolExecutor:
                                 fallback_error,
                             )
                     else:
-                        logger.warning("Failed to send output file {} to chat {}: {}", fname, chat_id, e)
+                        logger.warning(
+                            "Failed to send output file {} to chat {}: {}",
+                            fname,
+                            chat_id,
+                            e,
+                        )
                     failed_files.append(fname)
 
             result_dict["output_files_sent"] = sent_files
@@ -602,8 +759,7 @@ class ToolExecutor:
             return {
                 "success": False,
                 "error": (
-                    f"Daily search limit reached ({limit}/day). "
-                    "Try again tomorrow."
+                    f"Daily search limit reached ({limit}/day). " "Try again tomorrow."
                 ),
             }
 
@@ -654,4 +810,3 @@ class ToolExecutor:
             }
 
         return {"success": True, "skill_name": name, "instructions": content}
-

@@ -13,6 +13,7 @@ from ..models.settings import UserSettings
 from .scheduler_instance import scheduler
 from ..config import settings as app_settings
 
+
 class JobManager:
     """
     Manages per-user scheduled jobs.
@@ -25,13 +26,12 @@ class JobManager:
         "monthly",
         "news_digest",
         "channel_batch",
+        "calendar_digest",
         "proactive_planner",
         "proactive_planner_refresh",
     ]
 
-    GLOBAL_JOB_IDS = [
-        "userbot_followup_check",
-    ]
+    GLOBAL_JOB_IDS: list[str] = []
 
     @staticmethod
     def schedule_user_jobs(user: User, settings: UserSettings):
@@ -43,7 +43,7 @@ class JobManager:
             return
 
         tz = ZoneInfo(user.user_timezone)
-        
+
         # Remove existing deterministic jobs for this user before rescheduling.
         # Legacy morning/evening/weekly/monthly jobs are intentionally removed:
         # smart proactive planning schedules one-off touches instead.
@@ -61,12 +61,16 @@ class JobManager:
         # actually be sent today/tomorrow; this cron only gives it a chance to plan.
         planner_job_id = f"proactive_planner_{user.id}"
         if getattr(settings, "enable_smart_proactivity", True):
-            planner_time = user.wake_time or getattr(settings, "morning_window_start", None)
+            planner_time = user.wake_time or getattr(
+                settings, "morning_window_start", None
+            )
             planner_hour = planner_time.hour if planner_time else 9
             planner_minute = planner_time.minute if planner_time else 0
             scheduler.add_job(
                 func="app.scheduler.jobs:proactive_planner_job",
-                trigger=CronTrigger(hour=planner_hour, minute=planner_minute, timezone=tz),
+                trigger=CronTrigger(
+                    hour=planner_hour, minute=planner_minute, timezone=tz
+                ),
                 id=planner_job_id,
                 args=[user.id],
                 replace_existing=True,
@@ -78,13 +82,13 @@ class JobManager:
                 planner_minute,
             )
         else:
-            logger.info("Smart proactive planner not scheduled for user {} (disabled)", user.id)
+            logger.info(
+                "Smart proactive planner not scheduled for user {} (disabled)", user.id
+            )
 
         # News digest (wake_time + NEWS_DIGEST_OFFSET_MINUTES, if enabled and wake_time is set)
         job_id = f"news_digest_{user.id}"
         if settings.enable_news_digest and user.wake_time:
-            from datetime import datetime, timedelta
-
             wake_dt = datetime.combine(datetime.today(), user.wake_time)
             digest_dt = wake_dt + timedelta(
                 minutes=app_settings.NEWS_DIGEST_OFFSET_MINUTES
@@ -114,6 +118,35 @@ class JobManager:
                 user.id,
             )
 
+        # Daily calendar digest (wake_time + 10 minutes, when extraction is enabled)
+        job_id = f"calendar_digest_{user.id}"
+        if getattr(settings, "enable_calendar_extraction", True) and user.wake_time:
+            digest_dt = datetime.combine(datetime.today(), user.wake_time) + timedelta(
+                minutes=10
+            )
+            scheduler.add_job(
+                func="app.scheduler.jobs:calendar_daily_digest_job",
+                trigger=CronTrigger(
+                    hour=digest_dt.hour,
+                    minute=digest_dt.minute,
+                    timezone=tz,
+                ),
+                id=job_id,
+                args=[user.id],
+                replace_existing=True,
+            )
+            logger.info(
+                "Scheduled calendar digest for user {} at {:02d}:{:02d}",
+                user.id,
+                digest_dt.hour,
+                digest_dt.minute,
+            )
+        else:
+            logger.info(
+                "Calendar digest not scheduled for user {} (disabled or wake_time not set)",
+                user.id,
+            )
+
         # Channel batch digest flush (periodic, if channel monitoring is enabled)
         job_id = f"channel_batch_{user.id}"
         if getattr(settings, "enable_channel_monitoring", False):
@@ -131,7 +164,8 @@ class JobManager:
             )
             logger.info(
                 "Scheduled channel batch flush for user {} every {}h",
-                user.id, flush_hours,
+                user.id,
+                flush_hours,
             )
         else:
             logger.info(
@@ -151,7 +185,9 @@ class JobManager:
             args=[user_id],
             replace_existing=True,
         )
-        logger.debug("Scheduled proactive planner refresh for user {} at {}", user_id, run_at)
+        logger.debug(
+            "Scheduled proactive planner refresh for user {} at {}", user_id, run_at
+        )
 
     @staticmethod
     def remove_user_jobs(user_id: int):
@@ -186,26 +222,33 @@ class JobManager:
             JobManager.schedule_user_jobs(user, user_settings)
             count += 1
         logger.info("Rescheduled jobs for {} user(s)", count)
+        await JobManager.reschedule_calendar_reminders(session)
+        return count
+
+    @staticmethod
+    async def reschedule_calendar_reminders(session: AsyncSession) -> int:
+        """Re-attach reminder jobs for active calendar events after a restart."""
+        from sqlmodel import select
+
+        from ..models.calendar_event import CalendarEvent
+        from ..services.calendar_service import CalendarService
+
+        result = await session.execute(
+            select(CalendarEvent).where(CalendarEvent.status == "active")
+        )
+        count = 0
+        for event in result.scalars().all():
+            job_id = CalendarService.schedule_reminder(event)
+            if job_id and job_id != event.reminder_job_id:
+                event.reminder_job_id = job_id
+                session.add(event)
+                count += 1
+        logger.info("Reconciled calendar reminders for {} event(s)", count)
         return count
 
     @staticmethod
     def schedule_global_jobs() -> None:
         """Schedule global periodic jobs owned by JobManager."""
-        job_id = "userbot_followup_check"
-        scheduler.add_job(
-            func="app.scheduler.jobs:userbot_followup_check_job",
-            trigger=IntervalTrigger(
-                minutes=app_settings.USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES,
-                timezone=timezone.utc,
-            ),
-            id=job_id,
-            replace_existing=True,
-        )
-        logger.info(
-            "Scheduled userbot follow-up check every {} minute(s)",
-            app_settings.USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES,
-        )
-
         scheduler.add_job(
             func="app.scheduler.jobs:userbot_health_check_job",
             trigger=IntervalTrigger(
@@ -225,7 +268,9 @@ class JobManager:
         from sqlmodel import select
 
         if not user.user_timezone:
-            logger.warning("User {} has no timezone; skipping trigger scheduling", user.id)
+            logger.warning(
+                "User {} has no timezone; skipping trigger scheduling", user.id
+            )
             return
 
         tz = ZoneInfo(user.user_timezone)
@@ -263,7 +308,10 @@ class JobManager:
             )
             logger.info(
                 "Scheduled custom trigger {} for user {} at {:02d}:{:02d}",
-                trigger.id, user.id, trigger.cron_hour, trigger.cron_minute,
+                trigger.id,
+                user.id,
+                trigger.cron_hour,
+                trigger.cron_minute,
             )
 
     @staticmethod
@@ -273,32 +321,37 @@ class JobManager:
         """
         from ..services.habit_service import HabitService
         from ..models.users import User
-        
+
         user = await session.get(User, user_id)
         if not user or not user.user_timezone:
             return
-        
+
         habits = await HabitService.list_habits(session, user_id, active_only=True)
-        
+
         from zoneinfo import ZoneInfo
+
         tz = ZoneInfo(user.user_timezone)
-        
+
         for habit in habits:
             if habit.reminder_enabled and habit.reminder_time:
                 job_id = f"habit_reminder_{habit.id}"
-                
+
                 if scheduler.get_job(job_id):
                     scheduler.remove_job(job_id)
-                
+
                 scheduler.add_job(
                     func="app.scheduler.jobs:habit_reminder_job",
                     trigger=CronTrigger(
                         hour=habit.reminder_time.hour,
                         minute=habit.reminder_time.minute,
-                        timezone=tz
+                        timezone=tz,
                     ),
                     id=job_id,
                     args=[habit.id],
                     replace_existing=True,
                 )
-                logger.info("Scheduled reminder for habit {} at {}", habit.id, habit.reminder_time)
+                logger.info(
+                    "Scheduled reminder for habit {} at {}",
+                    habit.id,
+                    habit.reminder_time,
+                )

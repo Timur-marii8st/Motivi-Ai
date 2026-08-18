@@ -8,7 +8,9 @@ from app.services.gamification.schemas import FEATURE_FLAG_DEFAULTS
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     ENV: str = "dev"
     LOG_LEVEL: str = "INFO"
@@ -22,7 +24,9 @@ class Settings(BaseSettings):
     TELEGRAM_API_PROXY: str = ""
     TELEGRAM_USE_POLLING: bool = False
 
-    DATABASE_URL: str = Field(..., description="SQLAlchemy async URL, e.g., postgresql+asyncpg://...")
+    DATABASE_URL: str = Field(
+        ..., description="SQLAlchemy async URL, e.g., postgresql+asyncpg://..."
+    )
 
     # --- OpenRouter / OpenAI Config ---
     OPENROUTER_API_KEY: str
@@ -40,10 +44,14 @@ class Settings(BaseSettings):
     # Site Info for OpenRouter Rankings
 
     # Lifetime settings (in days)
-    EPISODE_LIFETIME_DAYS: float = 2.5 * 30.0 / 30.0  # 2.5 months ~ 75 days (keep float for clarity)
+    EPISODE_LIFETIME_DAYS: float = (
+        2.5 * 30.0 / 30.0
+    )  # 2.5 months ~ 75 days (keep float for clarity)
     WORKING_MEMORY_LIFETIME_DAYS: int = 5
 
-    ENCRYPTION_KEY: str = Field(..., description="Must be 32 url-safe base64-encoded bytes")  # Must be 32 url-safe base64-encoded bytes
+    ENCRYPTION_KEY: str = Field(
+        ..., description="Must be 32 url-safe base64-encoded bytes"
+    )  # Must be 32 url-safe base64-encoded bytes
     DATA_ENCRYPTION_KEYSET_B64: str = Field(
         ...,
         description="Base64-encoded JSON keyset for Tink AEAD (AES256_GCM by default)",
@@ -78,15 +86,15 @@ class Settings(BaseSettings):
     # Subscription & Limits
     TRIAL_DAYS: int = 7
     # 100 Stars is approx $2.00 (Standard Telegram pricing is ~0.02 USD per star)
-    SUBSCRIPTION_PRICE_STARS: int = 100 
+    SUBSCRIPTION_PRICE_STARS: int = 100
 
     # Technical Limit (Anti-Spam)
     LIMIT_TECHNICAL_SECONDS: int = 2  # 1 message every 2 seconds
 
     # Daily Quotas
-    LIMIT_DAILY_TRIAL: int = 20      # Guest/Trial
-    LIMIT_DAILY_PREMIUM: int = 200   # Subscriber
-    LIMIT_DAILY_EXPIRED: int = 0     # Hard block after trial ends
+    LIMIT_DAILY_TRIAL: int = 20  # Guest/Trial
+    LIMIT_DAILY_PREMIUM: int = 200  # Subscriber
+    LIMIT_DAILY_EXPIRED: int = 0  # Hard block after trial ends
 
     # Code Execution Daily Limits
     CODE_EXEC_DAILY_TRIAL: int = 5
@@ -116,19 +124,8 @@ class Settings(BaseSettings):
     USERBOT_MAX_GROUP_NOTIFS_PER_DAY: int = 5
     # Safety cap for active Telethon clients in one process.
     USERBOT_MAX_ACTIVE_CLIENTS: int = 100
-    # Pending reply approval timeout in seconds (after this, buttons expire)
-    USERBOT_REPLY_TIMEOUT: int = 600  # 10 minutes
-    # Max approved replies per user per day (anti-abuse)
-    USERBOT_MAX_REPLIES_PER_DAY: int = 50
-    # Min/max random delay before sending (seconds) — human-like behaviour
-    USERBOT_TYPING_DELAY_MIN: float = 1.0
-    USERBOT_TYPING_DELAY_MAX: float = 4.0
-    # How many outgoing message samples to keep per user for style learning
-    USERBOT_STYLE_SAMPLES_MAX: int = 30
     # How many messages to fetch from chat for conversation context
     USERBOT_THREAD_FETCH_LIMIT: int = 8
-    # TTL for sender relationship cache in Redis (seconds); default 30 days
-    USERBOT_SENDER_CACHE_TTL: int = 30 * 86_400
     # --- Channel intelligence ---
     # Relevance score thresholds (1-5 scale from LLM):
     #   >= HIGH  → send immediately with detail
@@ -140,22 +137,11 @@ class Settings(BaseSettings):
     USERBOT_CHANNEL_BATCH_MAX: int = 7
     # Interval (hours) for the periodic batch digest flush job
     USERBOT_CHANNEL_BATCH_FLUSH_HOURS: int = 4
-    # Persistent DM/group follow-up reminder checks
-    USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES: int = 15
-    USERBOT_MAX_FOLLOWUPS_PER_DAY: int = 5
-    USERBOT_FOLLOWUP_REMINDER_COOLDOWN_HOURS: int = 24
-    USERBOT_DEFAULT_FOLLOWUP_MINUTES: int = 120
-    # Generate optional multi-step action drafts for incoming DM/group messages.
-    USERBOT_ACTION_PLAN_ENABLED: bool = True
-    # How many recent private dialogs may be offered to the LLM as safe target candidates.
-    USERBOT_ACTION_TARGET_DIALOG_LIMIT: int = 20
-    # Hard cap for action-plan steps shown in one notification.
-    USERBOT_ACTION_PLAN_MAX_STEPS: int = 5
-    # Delay before processing DM/group messages to avoid suggesting replies
-    # for messages the user has already read.
+    # Delay before processing DM/group messages to avoid notifying about
+    # messages the user has already read.
     USERBOT_READ_CHECK_DELAY_SECONDS: int = 45
     # Quiet window for grouping bursty DM/group messages from the same sender
-    # before generating one reply suggestion notification.
+    # before generating one notification.
     USERBOT_REPLY_DEBOUNCE_SECONDS: int = 45
 
     # ── Feature Flags ─────────────────────────────────────────
@@ -195,5 +181,6 @@ class Settings(BaseSettings):
     def is_feature_enabled(self, flag_name: str) -> bool:
         """Check a single feature flag.  Missing flags default to False."""
         return self.feature_flags.get(flag_name, False)
+
 
 settings = Settings()

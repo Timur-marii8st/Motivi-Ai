@@ -48,6 +48,7 @@ async def init_db() -> None:
     from .models.plan import Plan  # noqa: F401
     from .models.user_trigger import UserTrigger  # noqa: F401
     from .models.userbot_thread import UserBotThread  # noqa: F401
+    from .models.calendar_event import CalendarEvent  # noqa: F401
 
     async with engine.begin() as conn:
         # Enable pgvector

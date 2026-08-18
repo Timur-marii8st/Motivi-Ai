@@ -59,8 +59,9 @@ app/
     proactive_planning_service.py Smart LLM planner for one-off proactive touches
     proactive_flows.py            LLM proactive message generation
     userbot_manager.py            Telethon lifecycle
-    userbot_monitor.py            Channel/DM/group event handlers
-    userbot_thread_service.py     Persistent reply/follow-up tracking and memory ingest
+    userbot_monitor.py            Channel/DM/group event handlers + calendar extraction
+    userbot_thread_service.py     Persistent thread/notification tracking and memory ingest
+    calendar_service.py           Internal calendar CRUD + LLM event extraction
     subscription_service.py       Trial/premium/admin status and payment validation
     event_bus.py                  Feature-flagged async domain event bus
     analytics_service.py          Gamification event persistence
@@ -71,8 +72,9 @@ app/
     settings.py                   User settings, smart proactivity, userbot, persona, gamification toggles
     payment.py                    Telegram Stars payment audit rows
     gamification.py               XP/badges/events/rewards/quests/pacts/circles
-    userbot_thread.py             Persistent userbot message/follow-up state
+    userbot_thread.py             Persistent userbot message/notification state
     userbot_session.py            Encrypted Telethon session
+    calendar_event.py             Internal calendar events with reminder fields
     core_memory.py, facts.py      Core memory and facts
     working_memory.py             Working memory and embeddings
     episode.py                    Episodes and embeddings
@@ -131,14 +133,15 @@ Registration order in `app/bot/dispatcher.py` is significant:
 9. `group_router`
 10. `triggers_router`
 11. `userbot_router`
-12. `persona_router`
-13. `gamification_router`
-14. `referral_router`
-15. `story_router`
-16. `memories_router`
-17. `multimodal_router`
-18. `chat_router`
-19. `common_router`
+12. `calendar_router`
+13. `persona_router`
+14. `gamification_router`
+15. `referral_router`
+16. `story_router`
+17. `memories_router`
+18. `multimodal_router`
+19. `chat_router`
+20. `common_router`
 
 Keep command/state routers before catch-all natural chat and fallback routers.
 
@@ -156,7 +159,8 @@ Current user-facing router commands include:
 | `admin.py` | `/admin_stats`, `/admin_broadcast` |
 | `group.py` | group/supergroup mention/reply handling |
 | `triggers.py` | `/triggers`, `/add_trigger` |
-| `userbot.py` | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests`, `/userbot_pending`, reply approval/edit/dismiss callbacks |
+| `userbot.py` | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests` |
+| `calendar.py` | `/calendar`, event detail/done/postpone/cancel callbacks |
 | `persona.py` | `/persona` |
 | `gamification.py` | `/level`, `/badges`, `/leaderboard` |
 | `referral.py` | `/referral` |
@@ -210,6 +214,8 @@ Tool schemas live in `app/llm/tool_schemas.py`. Execution lives in `app/services
 | `edit_plan` | Update a plan and optionally extend expiry |
 | `create_calendar_event` | Create Google Calendar event |
 | `check_calendar_availability` | Check calendar free/busy |
+| `list_my_calendar` | List upcoming internal calendar events |
+| `add_calendar_event` | Add internal calendar event with a reminder |
 | `execute_code` | Run code in sandbox and send output files |
 | `load_skill` | Load full skill instructions |
 | `web_search` | Tavily web/news search |
@@ -265,20 +271,32 @@ Global jobs currently include:
 
 - `cleanup_expired_memories` at 03:00 UTC
 - `archive_conversations` at 03:30 UTC
-- `userbot_followup_check` every `USERBOT_FOLLOWUP_CHECK_INTERVAL_MINUTES`
+- `userbot_health_check` every 10 minutes (restarts disconnected Telethon clients)
 
 Per-user scheduling is managed by `JobManager`:
 
 - `proactive_planner_{user_id}`: daily smart planner near wake time
 - `proactive_touch_{user_id}_...`: one-off messages scheduled by the planner
 - `news_digest_{user_id}`: opt-in digest after wake time offset
+- `calendar_digest_{user_id}`: daily calendar digest after wake time
 - `channel_batch_{user_id}`: batched medium-priority userbot channel posts
 - `trigger_{user_id}_{trigger_id}`: custom user triggers
 - `habit_reminder_{habit_id}`: habit reminders
+- `calendar_reminder_{event_id}`: one-off reminder for each active calendar event
 
-The old fixed morning/evening/weekly/monthly jobs are deprecated and route to the smart planner for compatibility.
+The old fixed morning/evening/weekly/monthly jobs are deprecated and route to the smart planner for compatibility. The old `userbot_followup_check` job and reply-suggestion flow were removed along with quick replies.
 
 Break mode is checked before proactive jobs, triggers, reminders, and most background user-facing sends.
+
+### Internal Calendar
+
+`CalendarEvent` (table `calendar_events`) is Motivi's own in-bot calendar. Events are created:
+
+- Automatically by the userbot pipeline — `CalendarExtractionService` asks the extractor LLM to pull concrete dates/deadlines/meetings from incoming DMs, group messages, and high-priority channel posts. A detected "reply by <time>" obligation becomes a calendar event too.
+- Via the `add_calendar_event` LLM tool from chat.
+- Events carry `source_type` (`dm`/`group`/`channel`/`chat`/`manual`), encrypted `title`/`description`, and a reminder offset.
+
+`CalendarService` owns CRUD and reminder scheduling: each active event gets a one-off APScheduler `calendar_reminder_{event_id}` job, rescheduled on startup via `JobManager.reschedule_calendar_reminders()`. Users manage events through `/calendar` (done / postpone / cancel). Gating setting: `UserSettings.enable_calendar_extraction`.
 
 ### Smart Proactivity
 
@@ -286,22 +304,21 @@ Break mode is checked before proactive jobs, triggers, reminders, and most backg
 
 ### Telegram Userbot
 
-Users connect personal Telegram accounts through `/connect_userbot`. Telethon sessions are encrypted in `UserBotSession`.
+Users connect personal Telegram accounts through `/connect_userbot`. Telethon sessions are encrypted in `UserBotSession`. The account is monitored **read-only**; the quick-reply / reply-suggestion feature was removed, and Motivi never sends messages on behalf of the user.
 
 The userbot subsystem supports:
 
-- Channel post relevance scoring with high-priority immediate notifications.
+- Channel post relevance scoring with high-priority immediate notifications (which also feed the internal calendar).
 - Medium-priority channel batching and scheduled flushes.
-- DM/group incoming message reply suggestions.
-- Approval buttons, manual edit, dismiss, and pending thread listing.
-- Persistent `UserBotThread` rows for follow-up reminders and optional memory ingest.
-- Optional outgoing reply sending only after user approval.
+- DM/group incoming message notifications for important messages.
+- Calendar extraction from messages and posts (deadlines, meetings, "reply by" obligations).
+- Persistent `UserBotThread` rows for notification lifecycle tracking and optional memory ingest.
 
 Important safety constraints:
 
-- Do not add automatic send behavior without explicit approval flow.
+- Keep the userbot read-only: no sending messages as the user.
 - Keep session strings encrypted.
-- Respect per-user/day notification and follow-up limits.
+- Respect per-user/day notification limits.
 - Use `topic_kwargs_for_user(user)` when sending back into a private topic.
 
 ### Telegram Private Topics
@@ -411,7 +428,7 @@ Important environment variables:
 | `SEARCH_DAILY_TRIAL`, `SEARCH_DAILY_PREMIUM` | search quotas |
 | `NEWS_DIGEST_OFFSET_MINUTES` | digest offset after wake time |
 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | MTProto credentials |
-| `USERBOT_*` | userbot limits, thresholds, follow-ups, style/context settings |
+| `USERBOT_*` | userbot notification limits, channel thresholds, debounce/read-check settings |
 | `FEATURE_FLAGS_JSON` | JSON or comma-separated feature flag overrides |
 
 ## Development Workflow
@@ -540,8 +557,9 @@ poetry run alembic revision --autogenerate -m "description"
 | `app/llm/tool_schemas.py` | LLM tool definitions |
 | `app/services/tool_executor.py` | LLM tool implementations |
 | `app/services/proactive_planning_service.py` | Smart proactive planner |
-| `app/services/userbot_monitor.py` | Telethon event processing |
-| `app/services/userbot_thread_service.py` | Persistent userbot thread/follow-up logic |
+| `app/services/userbot_monitor.py` | Telethon event processing + calendar extraction |
+| `app/services/userbot_thread_service.py` | Persistent userbot thread/notification logic |
+| `app/services/calendar_service.py` | Internal calendar CRUD + LLM event extraction |
 | `app/services/subscription_service.py` | Trial/premium/admin/payment logic |
 | `app/services/gamification/schemas.py` | Game events, XP constants, feature flags |
 | `app/security/encrypted_types.py` | Encrypted DB types |
@@ -578,6 +596,8 @@ Known migrations in this repo:
 | `20260501_add_smart_proactivity_settings` | Smart proactivity settings |
 | `20260502_add_userbot_threads` | Persistent userbot threads |
 | `20260507_add_private_topic_id_to_users` | Private topic id on users |
+| `20260614_add_userbot_notification_tracking` | Userbot notification tracking fields |
+| `20260817_add_calendar_events` | Internal calendar events table + extraction setting |
 
 ## Current Caveats
 

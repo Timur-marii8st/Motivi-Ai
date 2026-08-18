@@ -2,12 +2,11 @@
 Tool/function definitions for OpenAI/OpenRouter function calling.
 """
 
+
 def _to_openai_tool(schema: dict) -> dict:
     """Wraps a function schema in OpenAI's tool format."""
-    return {
-        "type": "function",
-        "function": schema
-    }
+    return {"type": "function", "function": schema}
+
 
 TOOL_SCHEDULE_REMINDER = {
     "name": "schedule_reminder",
@@ -15,8 +14,14 @@ TOOL_SCHEDULE_REMINDER = {
     "parameters": {
         "type": "object",
         "properties": {
-            "message_text": {"type": "string", "description": "Text of the reminder message to send"},
-            "reminder_datetime_iso": {"type": "string", "description": "Exact datetime for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS). Use the user's local time. Example: 2025-11-26T15:30:00"},
+            "message_text": {
+                "type": "string",
+                "description": "Text of the reminder message to send",
+            },
+            "reminder_datetime_iso": {
+                "type": "string",
+                "description": "Exact datetime for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS). Use the user's local time. Example: 2025-11-26T15:30:00",
+            },
         },
         "required": ["message_text", "reminder_datetime_iso"],
     },
@@ -28,7 +33,10 @@ TOOL_CANCEL_REMINDER = {
     "parameters": {
         "type": "object",
         "properties": {
-            "job_id": {"type": "string", "description": "The job_id returned when the reminder was scheduled"},
+            "job_id": {
+                "type": "string",
+                "description": "The job_id returned when the reminder was scheduled",
+            },
         },
         "required": ["job_id"],
     },
@@ -53,9 +61,12 @@ TOOL_CREATE_PLAN = {
             "plan_level": {
                 "type": "string",
                 "enum": ["daily", "weekly", "monthly"],
-                "description": "The time scope of the plan: 'daily' (stored for 1 day), 'weekly' (stored for 7 days), or 'monthly' (stored for 30 days)"
+                "description": "The time scope of the plan: 'daily' (stored for 1 day), 'weekly' (stored for 7 days), or 'monthly' (stored for 30 days)",
             },
-            "plan_content": {"type": "string", "description": "The plan content to send to the user and store in memory"},
+            "plan_content": {
+                "type": "string",
+                "description": "The plan content to send to the user and store in memory",
+            },
         },
         "required": ["plan_level", "plan_content"],
     },
@@ -78,10 +89,13 @@ TOOL_EDIT_PLAN = {
         "type": "object",
         "properties": {
             "plan_id": {"type": "integer", "description": "The ID of the plan to edit"},
-            "plan_content": {"type": "string", "description": "The new plan content to send to the user and store"},
+            "plan_content": {
+                "type": "string",
+                "description": "The new plan content to send to the user and store",
+            },
             "extend_expiry": {
                 "type": "boolean",
-                "description": "If true, extends the expiry date based on the original plan level from now. Default is false."
+                "description": "If true, extends the expiry date based on the original plan level from now. Default is false.",
             },
         },
         "required": ["plan_id", "plan_content"],
@@ -95,8 +109,14 @@ TOOL_CREATE_CALENDAR_EVENT = {
         "type": "object",
         "properties": {
             "summary": {"type": "string", "description": "Event title"},
-            "start_datetime": {"type": "string", "description": "Start datetime ISO format"},
-            "end_datetime": {"type": "string", "description": "End datetime ISO format"},
+            "start_datetime": {
+                "type": "string",
+                "description": "Start datetime ISO format",
+            },
+            "end_datetime": {
+                "type": "string",
+                "description": "End datetime ISO format",
+            },
             "description": {"type": "string", "description": "Event description"},
         },
         "required": ["summary", "start_datetime", "end_datetime"],
@@ -109,10 +129,68 @@ TOOL_CHECK_AVAILABILITY = {
     "parameters": {
         "type": "object",
         "properties": {
-            "start_datetime": {"type": "string", "description": "Start datetime ISO format"},
-            "end_datetime": {"type": "string", "description": "End datetime ISO format"},
+            "start_datetime": {
+                "type": "string",
+                "description": "Start datetime ISO format",
+            },
+            "end_datetime": {
+                "type": "string",
+                "description": "End datetime ISO format",
+            },
         },
         "required": ["start_datetime", "end_datetime"],
+    },
+}
+
+TOOL_LIST_MY_CALENDAR = {
+    "name": "list_my_calendar",
+    "description": (
+        "List upcoming events from Motivi's internal calendar for the next 7 days. "
+        "This calendar is filled automatically from messages and channel posts "
+        "the userbot monitors, and can also be managed with add_calendar_event. "
+        "Use it when the user asks what is planned, about upcoming events, "
+        "deadlines or meetings."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+TOOL_ADD_CALENDAR_EVENT = {
+    "name": "add_calendar_event",
+    "description": (
+        "Add an event to Motivi's internal calendar with an automatic reminder. "
+        "Use when the user asks to remember/plan something at a concrete time "
+        "(meeting, deadline, call, personal event). The reminder is sent to the "
+        "user automatically before the event starts."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "Short event title (max 60 chars)",
+            },
+            "start_datetime_iso": {
+                "type": "string",
+                "description": (
+                    "Start datetime in ISO format (YYYY-MM-DDTHH:MM:SS) in the "
+                    "user's local timezone. Example: 2026-08-20T15:30:00"
+                ),
+            },
+            "end_datetime_iso": {
+                "type": "string",
+                "description": "Optional end datetime, same format, user's local timezone",
+            },
+            "description": {"type": "string", "description": "Optional event details"},
+            "remind_before_minutes": {
+                "type": "integer",
+                "description": "How many minutes before the event to remind (default 15)",
+            },
+        },
+        "required": ["title", "start_datetime_iso"],
     },
 }
 
@@ -232,6 +310,8 @@ RAW_TOOLS = [
     TOOL_EDIT_PLAN,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CHECK_AVAILABILITY,
+    TOOL_LIST_MY_CALENDAR,
+    TOOL_ADD_CALENDAR_EVENT,
     TOOL_EXECUTE_CODE,
     TOOL_LOAD_SKILL,
     TOOL_WEB_SEARCH,

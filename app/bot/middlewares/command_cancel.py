@@ -11,7 +11,6 @@ from sqlmodel import select
 from ...db import AsyncSessionLocal
 from ...models.users import User
 from ...services.userbot_manager import UserBotManager
-from ...services.userbot_monitor import delete_pending_reply
 
 
 class CommandCancellationMiddleware(BaseMiddleware):
@@ -92,17 +91,13 @@ async def _cleanup_active_flow(
         await _cleanup_userbot_setup(tg_user_id=tg_user_id)
         return
 
-    if current_state.startswith("UserBotReplyEdit:"):
-        state_data = await state.get_data()
-        pending_key = state_data.get("pending_key")
-        if pending_key:
-            await delete_pending_reply(pending_key)
-
 
 async def _cleanup_userbot_setup(*, tg_user_id: int) -> None:
     try:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(User).where(User.tg_user_id == tg_user_id))
+            result = await session.execute(
+                select(User).where(User.tg_user_id == tg_user_id)
+            )
             user = result.scalar_one_or_none()
             if not user:
                 return
@@ -118,4 +113,6 @@ async def _cleanup_userbot_setup(*, tg_user_id: int) -> None:
 
             UserBotManager.clear_pending(user.id)
     except Exception as exc:
-        logger.debug("Failed to cleanup userbot setup for tg_user_id {}: {}", tg_user_id, exc)
+        logger.debug(
+            "Failed to cleanup userbot setup for tg_user_id {}: {}", tg_user_id, exc
+        )

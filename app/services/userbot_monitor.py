@@ -4,43 +4,30 @@ UserBotMonitor — Telethon event handlers and LLM-powered notification logic.
 Four types of events are handled:
   1. New posts in channels the user is subscribed to.
      → An LLM classifies whether the post is relevant to the user's interests.
-       If yes, a formatted notification is sent via the bot.
+       If yes, a formatted notification is sent via the bot. High-priority
+       posts are additionally scanned for calendar-worthy items.
   2. Incoming private messages (DMs) to the user's personal account.
-     → The LLM suggests 3 reply options written in the user's personal style.
-       A formatted notification with approval buttons is sent via the bot.
+     → The message is classified; important messages produce a notification
+       and any concrete dates/deadlines are added to Motivi's calendar.
   3. Incoming group/supergroup messages mentioning the user or replying to them.
-     → Same as DMs: LLM suggests replies with approval buttons.
+     → Same as DMs.
   4. Outgoing messages from the user (DMs and groups).
-     → Stored as communication style samples so the LLM can mimic the user.
+     → Used to detect that the user already answered, so notifications for
+       handled conversations are cleaned up.
 
-Context assembly for reply suggestions
----------------------------------------
-Before generating suggestions the monitor gathers:
-  • Conversation thread — last N messages from the chat (via Telethon).
-  • User profile — core memory facts (personality, occupation, interests).
-  • Communication style — recent outgoing messages the user actually typed.
-  • Sender relationship — cached LLM-inferred description of who the sender is.
-
-Safety guarantees
------------------
-* Telethon write operations (send_message, send_chat_action) are ONLY called
-  after explicit user approval via bot callback buttons (human-in-the-loop).
-* Human-like delays and typing simulation are applied before sending.
-* Rate limiting via Redis prevents notification and reply floods.
-* All pending replies expire after USERBOT_REPLY_TIMEOUT seconds.
+Motivi never sends messages on behalf of the user: the account is monitored
+read-only. Calendar events extracted from messages get automatic reminders.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import re
 import time
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from loguru import logger
 from telethon import TelegramClient, events
 
@@ -48,7 +35,6 @@ from ..config import settings as app_settings
 from ..llm.client import async_client
 from ..utils.telegram_topics import topic_kwargs_for_user
 from .userbot_state_probe import (
-    cache_manual_outgoing,
     cache_read_marker,
     get_cached_read_marker,
     get_read_inbox_max_id,
@@ -106,7 +92,7 @@ def setup_handlers(client: TelegramClient, user_id: int, bot: "Bot") -> None:
             assistant_bot_id=await resolve_assistant_bot_id(),
         )
 
-    # Learn communication style from the user's own outgoing messages
+    # Track the user's own outgoing messages to detect manual replies
     @client.on(
         events.NewMessage(outgoing=True, func=lambda e: e.is_private or e.is_group)
     )
@@ -244,8 +230,17 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
         if not tg_id:
             return
 
-        # HIGH relevance → send immediately with detail
+        # HIGH relevance → send immediately with detail + calendar extraction
         if score >= app_settings.USERBOT_CHANNEL_HIGH_THRESHOLD:
+            calendar_events = await _extract_calendar_events(
+                user_id=user_id,
+                text=text,
+                source_type="channel",
+                source_name=channel_name,
+                source_chat_id=channel_id,
+                source_message_id=event.message.id,
+            )
+
             reason = classification.get("reason", "")
             notification = _format_high_priority_notification(
                 channel_name=channel_name,
@@ -253,6 +248,9 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
                 reason=reason,
                 post_link=post_link,
             )
+            calendar_lines = await _format_calendar_lines(user_id, calendar_events)
+            if calendar_lines:
+                notification += "\n" + calendar_lines
             await bot.send_message(
                 tg_id,
                 notification,
@@ -290,7 +288,7 @@ async def _handle_channel_post(event, user_id: int, bot: "Bot") -> None:
 
 
 # ---------------------------------------------------------------------------
-# Outgoing message handler — style learning
+# Outgoing message handler — manual reply detection and notification cleanup
 # ---------------------------------------------------------------------------
 
 
@@ -301,11 +299,7 @@ async def _handle_outgoing_message(
     bot: Bot | None = None,
     assistant_bot_id: int | None = None,
 ) -> None:
-    """
-    Collect the user's own outgoing messages as communication style samples.
-    Stored in a Redis ring buffer (LPUSH + LTRIM).
-    Bot-sent replies are filtered out via a short-lived skip marker.
-    """
+    """Detect that the user answered manually and clean up open notifications."""
     try:
         if _is_private_chat_with_telegram_id(event, assistant_bot_id):
             return
@@ -313,31 +307,6 @@ async def _handle_outgoing_message(
         chat_id = _event_chat_id(event)
         if chat_id is None:
             return
-
-        text: str = event.message.message or ""
-        if not text.strip():
-            return
-
-        # Skip bot-sent replies (marked by _send_reply_with_human_simulation)
-        redis = await _get_redis()
-        try:
-            skip_key = f"ub_skip_outgoing:{user_id}:{chat_id}"
-            if await redis.get(skip_key):
-                return
-
-            if len(text) >= 5:
-                # Store as style sample: JSON with text and timestamp
-                sample = json.dumps(
-                    {"text": text[:500], "ts": int(time.time())},
-                    ensure_ascii=False,
-                )
-                list_key = f"ub_style:{user_id}"
-                async with redis.pipeline(transaction=True) as pipe:
-                    pipe.lpush(list_key, sample)
-                    pipe.ltrim(list_key, 0, app_settings.USERBOT_STYLE_SAMPLES_MAX - 1)
-                    await pipe.execute()
-        finally:
-            await redis.aclose()
 
         message_id = _coerce_int(getattr(event.message, "id", None))
         await _record_manual_outgoing(
@@ -352,7 +321,6 @@ async def _handle_outgoing_message(
             message_id=message_id,
             chat_type="group" if getattr(event, "is_group", False) else "dm",
             reply_to_message_id=_reply_to_message_id(event),
-            reply_text=text,
         )
         if cleanup_target:
             await _cleanup_thread_notification(
@@ -366,7 +334,7 @@ async def _handle_outgoing_message(
 
 
 # ---------------------------------------------------------------------------
-# DM handler — with approval buttons
+# DM handler
 # ---------------------------------------------------------------------------
 
 
@@ -413,7 +381,6 @@ async def _handle_dm(
                 user_id=user_id,
                 bot=bot,
                 client=client,
-                assistant_bot_id=assistant_bot_id,
                 sender=sender,
                 sender_tg_id=sender_tg_id,
                 batch_key=batch_key,
@@ -430,7 +397,6 @@ async def _process_dm_debounced(
     bot: "Bot",
     client: TelegramClient,
     *,
-    assistant_bot_id: int | None = None,
     sender=None,
     sender_tg_id: int = 0,
     batch_key: str,
@@ -495,34 +461,8 @@ async def _process_dm_debounced(
         )
         sender_tg_id = sender_tg_id or getattr(sender, "id", 0)
 
-        # Gather context in parallel for high-quality reply suggestions
-        thread_coro = _fetch_conversation_thread(client, event.chat_id)
-        facts_coro = _get_user_core_facts(user_id)
-        style_coro = _get_style_samples(user_id)
-        relationship_coro = _get_sender_relationship(user_id, sender_tg_id)
-
-        thread, facts, style_samples, relationship = await asyncio.gather(
-            thread_coro,
-            facts_coro,
-            style_coro,
-            relationship_coro,
-            return_exceptions=True,
-        )
-        # Gracefully handle failures in context fetching
-        if isinstance(thread, BaseException):
-            logger.debug("Thread fetch failed for user {}: {}", user_id, thread)
-            thread = []
-        if isinstance(facts, BaseException):
-            logger.debug("Facts fetch failed for user {}: {}", user_id, facts)
-            facts = []
-        if isinstance(style_samples, BaseException):
-            logger.debug("Style fetch failed for user {}: {}", user_id, style_samples)
-            style_samples = []
-        if isinstance(relationship, BaseException):
-            logger.debug(
-                "Relationship fetch failed for user {}: {}", user_id, relationship
-            )
-            relationship = None
+        # Gather conversation context for classification
+        thread = await _fetch_conversation_thread(client, event.chat_id)
 
         classification = await _classify_incoming_message(
             user_id=user_id,
@@ -538,35 +478,6 @@ async def _process_dm_debounced(
             )
             return
         summary = classification.get("summary") or _short_summary(text)
-        if not _classification_requires_response(classification):
-            await _persist_incoming_thread(
-                user_id=user_id,
-                chat_id=event.chat_id,
-                message_id=latest_message_id,
-                sender_name=sender_name,
-                sender_tg_id=sender_tg_id,
-                chat_type="dm",
-                message_text=text,
-                summary=summary,
-                classification=classification,
-                suggestions=[],
-            )
-            logger.info(
-                "Userbot: skipping DM notification for user {} - no response required",
-                user_id,
-            )
-            return
-
-        suggestions = await _generate_reply_suggestions(
-            user_id=user_id,
-            message_text=text,
-            sender_name=sender_name,
-            sender_tg_id=sender_tg_id,
-            conversation_thread=thread,
-            user_facts=facts,
-            style_samples=style_samples,
-            sender_relationship=relationship,
-        )
 
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
@@ -578,8 +489,38 @@ async def _process_dm_debounced(
             message_text=text,
             summary=summary,
             classification=classification,
-            suggestions=suggestions,
         )
+
+        # Calendar: extract concrete events + create a follow-up event when
+        # the message expects an answer by a specific time.
+        calendar_events = await _extract_calendar_events(
+            user_id=user_id,
+            text=text,
+            source_type="dm",
+            source_name=sender_name,
+            source_chat_id=event.chat_id,
+            source_message_id=latest_message_id,
+        )
+        followup_event = await _create_followup_event(
+            user_id=user_id,
+            classification=classification,
+            sender_name=sender_name,
+            summary=summary,
+            source_type="dm",
+            source_chat_id=event.chat_id,
+            source_message_id=latest_message_id,
+        )
+        if followup_event:
+            calendar_events.append(followup_event)
+
+        requires_response = _classification_requires_response(classification)
+        importance = _classification_importance(classification)
+        if not requires_response and importance < 4:
+            logger.info(
+                "Userbot: skipping DM notification for user {} - not important enough",
+                user_id,
+            )
+            return
 
         if await _check_if_message_read(
             client, user_id, event.chat_id, latest_message_id
@@ -603,39 +544,9 @@ async def _process_dm_debounced(
             )
             return
 
-        action_plan = None
-        if app_settings.USERBOT_ACTION_PLAN_ENABLED:
-            target_candidates = await _fetch_action_target_candidates(
-                client=client,
-                event=event,
-                sender=sender,
-                sender_name=sender_name,
-                assistant_bot_id=assistant_bot_id,
-            )
-            action_plan = await _generate_action_plan(
-                user_id=user_id,
-                message_text=text,
-                sender_name=sender_name,
-                chat_type="dm",
-                conversation_thread=thread,
-                user_facts=facts,
-                style_samples=style_samples,
-                target_candidates=target_candidates,
-            )
-
         tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
             return
-
-        if action_plan:
-            action_plan = await _auto_run_and_hide_reminder_steps(
-                user_id=user_id,
-                source_chat_id=event.chat_id,
-                sender_tg_id=sender_tg_id,
-                owner_tg_chat_id=tg_id,
-                action_plan=action_plan,
-                bot=bot,
-            )
 
         preview = _batch_preview(batch_messages, fallback=text)
 
@@ -645,76 +556,22 @@ async def _process_dm_debounced(
             f"<i>{_esc(preview)}</i>\n"
             f"━━━━━━━━━━━━\n"
         )
-        if suggestions:
-            notification += "💡 <b>Suggested replies:</b>\n"
-            for i, suggestion in enumerate(suggestions, 1):
-                notification += f"{i}️⃣ {_esc(suggestion)}\n"
-        else:
-            notification += "⚠️ Reply suggestions are temporarily unavailable.\n"
-        if action_plan:
-            notification += _format_action_plan_for_notification(action_plan)
+        calendar_lines = await _format_calendar_lines(user_id, calendar_events)
+        if calendar_lines:
+            notification += calendar_lines + "\n"
 
-        # Determine if we show approval buttons
-        show_buttons = (
-            user_settings and user_settings.enable_reply_approval
-            if user_settings
-            else True
+        sent_message = await bot.send_message(
+            tg_id,
+            notification,
+            parse_mode="HTML",
+            **topic_kwargs,
         )
-        pending_key = None
-        sent_message = None
-
-        if show_buttons:
-            # Store pending reply in Redis
-            pending_key = await _store_pending_reply(
-                user_id=user_id,
-                chat_id=event.chat_id,
-                message_id=latest_message_id,
-                sender_name=sender_name,
-                sender_tg_id=sender_tg_id,
-                chat_type="dm",
-                suggestions=suggestions,
-                thread_id=thread_id,
-            )
-            if action_plan:
-                action_plan["user_id"] = user_id
-                action_plan["reply_pending_key"] = pending_key
-                action_plan["thread_id"] = thread_id
-                action_plan["source_chat_id"] = event.chat_id
-                action_plan["source_message_id"] = latest_message_id
-                action_plan["suggestions"] = suggestions
-                action_plan["owner_tg_chat_id"] = tg_id
-                action_plan["notification_text"] = notification
-                await _store_pending_action_plan(
-                    pending_key=pending_key,
-                    action_plan=action_plan,
-                )
-
-            keyboard = build_userbot_approval_keyboard(
-                pending_key,
-                len(suggestions),
-                action_plan=action_plan,
-            )
-            sent_message = await bot.send_message(
-                tg_id,
-                notification,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-                **topic_kwargs,
-            )
-        else:
-            sent_message = await bot.send_message(
-                tg_id,
-                notification,
-                parse_mode="HTML",
-                **topic_kwargs,
-            )
 
         await _attach_thread_notification(
             user_id=user_id,
             thread_id=thread_id,
             notification_chat_id=tg_id,
             notification_message_id=getattr(sent_message, "message_id", None),
-            pending_key=pending_key,
         )
 
         logger.info(
@@ -725,7 +582,7 @@ async def _process_dm_debounced(
 
 
 # ---------------------------------------------------------------------------
-# Group message handler — with approval buttons
+# Group message handler
 # ---------------------------------------------------------------------------
 
 
@@ -802,7 +659,6 @@ async def _handle_group_message(
                 user_id=user_id,
                 bot=bot,
                 client=client,
-                assistant_bot_id=assistant_bot_id,
                 is_reply_to_me=is_reply_to_me,
                 sender=sender,
                 sender_tg_id=sender_tg_id,
@@ -820,7 +676,6 @@ async def _process_group_debounced(
     bot: "Bot",
     client: TelegramClient,
     *,
-    assistant_bot_id: int | None = None,
     is_reply_to_me: bool = False,
     sender=None,
     sender_tg_id: int = 0,
@@ -892,27 +747,8 @@ async def _process_group_debounced(
         chat = await event.get_chat()
         chat_title = getattr(chat, "title", None) or f"group {event.chat_id}"
 
-        # Gather context in parallel
-        thread_coro = _fetch_conversation_thread(client, event.chat_id)
-        facts_coro = _get_user_core_facts(user_id)
-        style_coro = _get_style_samples(user_id)
-        relationship_coro = _get_sender_relationship(user_id, sender_tg_id)
-
-        thread, facts, style_samples, relationship = await asyncio.gather(
-            thread_coro,
-            facts_coro,
-            style_coro,
-            relationship_coro,
-            return_exceptions=True,
-        )
-        if isinstance(thread, BaseException):
-            thread = []
-        if isinstance(facts, BaseException):
-            facts = []
-        if isinstance(style_samples, BaseException):
-            style_samples = []
-        if isinstance(relationship, BaseException):
-            relationship = None
+        # Gather conversation context for classification
+        thread = await _fetch_conversation_thread(client, event.chat_id)
 
         classification = await _classify_incoming_message(
             user_id=user_id,
@@ -928,35 +764,6 @@ async def _process_group_debounced(
             )
             return
         summary = classification.get("summary") or _short_summary(text)
-        if not _classification_requires_response(classification):
-            await _persist_incoming_thread(
-                user_id=user_id,
-                chat_id=event.chat_id,
-                message_id=latest_message_id,
-                sender_name=sender_name,
-                sender_tg_id=sender_tg_id,
-                chat_type="group",
-                message_text=text,
-                summary=summary,
-                classification=classification,
-                suggestions=[],
-            )
-            logger.info(
-                "Userbot: skipping group notification for user {} - no response required",
-                user_id,
-            )
-            return
-
-        suggestions = await _generate_reply_suggestions(
-            user_id=user_id,
-            message_text=text,
-            sender_name=sender_name,
-            sender_tg_id=sender_tg_id,
-            conversation_thread=thread,
-            user_facts=facts,
-            style_samples=style_samples,
-            sender_relationship=relationship,
-        )
 
         thread_id = await _persist_incoming_thread(
             user_id=user_id,
@@ -968,8 +775,36 @@ async def _process_group_debounced(
             message_text=text,
             summary=summary,
             classification=classification,
-            suggestions=suggestions,
         )
+
+        calendar_events = await _extract_calendar_events(
+            user_id=user_id,
+            text=text,
+            source_type="group",
+            source_name=sender_name,
+            source_chat_id=event.chat_id,
+            source_message_id=latest_message_id,
+        )
+        followup_event = await _create_followup_event(
+            user_id=user_id,
+            classification=classification,
+            sender_name=sender_name,
+            summary=summary,
+            source_type="group",
+            source_chat_id=event.chat_id,
+            source_message_id=latest_message_id,
+        )
+        if followup_event:
+            calendar_events.append(followup_event)
+
+        requires_response = _classification_requires_response(classification)
+        importance = _classification_importance(classification)
+        if not requires_response and importance < 4:
+            logger.info(
+                "Userbot: skipping group notification for user {} - not important enough",
+                user_id,
+            )
+            return
 
         if await _check_if_message_read(
             client, user_id, event.chat_id, latest_message_id
@@ -993,39 +828,9 @@ async def _process_group_debounced(
             )
             return
 
-        action_plan = None
-        if app_settings.USERBOT_ACTION_PLAN_ENABLED:
-            target_candidates = await _fetch_action_target_candidates(
-                client=client,
-                event=event,
-                sender=sender,
-                sender_name=sender_name,
-                assistant_bot_id=assistant_bot_id,
-            )
-            action_plan = await _generate_action_plan(
-                user_id=user_id,
-                message_text=text,
-                sender_name=sender_name,
-                chat_type="group",
-                conversation_thread=thread,
-                user_facts=facts,
-                style_samples=style_samples,
-                target_candidates=target_candidates,
-            )
-
         tg_id, topic_kwargs = await _get_tg_delivery(user_id)
         if not tg_id:
             return
-
-        if action_plan:
-            action_plan = await _auto_run_and_hide_reminder_steps(
-                user_id=user_id,
-                source_chat_id=event.chat_id,
-                sender_tg_id=sender_tg_id,
-                owner_tg_chat_id=tg_id,
-                action_plan=action_plan,
-                bot=bot,
-            )
 
         preview = _batch_preview(batch_messages, fallback=text)
 
@@ -1036,73 +841,22 @@ async def _process_group_debounced(
             f"<i>{_esc(preview)}</i>\n"
             f"━━━━━━━━━━━━\n"
         )
-        if suggestions:
-            notification += "💡 <b>Suggested replies:</b>\n"
-            for i, suggestion in enumerate(suggestions, 1):
-                notification += f"{i}️⃣ {_esc(suggestion)}\n"
-        else:
-            notification += "⚠️ Reply suggestions are temporarily unavailable.\n"
-        if action_plan:
-            notification += _format_action_plan_for_notification(action_plan)
+        calendar_lines = await _format_calendar_lines(user_id, calendar_events)
+        if calendar_lines:
+            notification += calendar_lines + "\n"
 
-        show_buttons = (
-            user_settings and user_settings.enable_reply_approval
-            if user_settings
-            else True
+        sent_message = await bot.send_message(
+            tg_id,
+            notification,
+            parse_mode="HTML",
+            **topic_kwargs,
         )
-        pending_key = None
-        sent_message = None
-
-        if show_buttons:
-            pending_key = await _store_pending_reply(
-                user_id=user_id,
-                chat_id=event.chat_id,
-                message_id=latest_message_id,
-                sender_name=sender_name,
-                sender_tg_id=sender_tg_id,
-                chat_type="group",
-                suggestions=suggestions,
-                thread_id=thread_id,
-            )
-            if action_plan:
-                action_plan["user_id"] = user_id
-                action_plan["reply_pending_key"] = pending_key
-                action_plan["thread_id"] = thread_id
-                action_plan["source_chat_id"] = event.chat_id
-                action_plan["source_message_id"] = latest_message_id
-                action_plan["suggestions"] = suggestions
-                action_plan["owner_tg_chat_id"] = tg_id
-                action_plan["notification_text"] = notification
-                await _store_pending_action_plan(
-                    pending_key=pending_key,
-                    action_plan=action_plan,
-                )
-            keyboard = build_userbot_approval_keyboard(
-                pending_key,
-                len(suggestions),
-                action_plan=action_plan,
-            )
-            sent_message = await bot.send_message(
-                tg_id,
-                notification,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-                **topic_kwargs,
-            )
-        else:
-            sent_message = await bot.send_message(
-                tg_id,
-                notification,
-                parse_mode="HTML",
-                **topic_kwargs,
-            )
 
         await _attach_thread_notification(
             user_id=user_id,
             thread_id=thread_id,
             notification_chat_id=tg_id,
             notification_message_id=getattr(sent_message, "message_id", None),
-            pending_key=pending_key,
         )
 
         logger.info(
@@ -1116,96 +870,136 @@ async def _process_group_debounced(
 
 
 # ---------------------------------------------------------------------------
-# Approval keyboard builder
+# Calendar integration
 # ---------------------------------------------------------------------------
 
 
-def build_userbot_approval_keyboard(
-    pending_key: str,
-    num_suggestions: int,
+async def _extract_calendar_events(
     *,
-    action_plan: dict | None = None,
-) -> InlineKeyboardMarkup:
-    """Build inline keyboard with reply and optional action-plan approval buttons."""
-    rows: list[list[InlineKeyboardButton]] = []
+    user_id: int,
+    text: str,
+    source_type: str,
+    source_name: str | None,
+    source_chat_id: int | None,
+    source_message_id: int | None,
+) -> list:
+    """Extract calendar-worthy items from message text and persist them."""
+    try:
+        user_settings = await _get_user_settings(user_id)
+        if user_settings and not getattr(
+            user_settings, "enable_calendar_extraction", True
+        ):
+            return []
 
-    # Row of suggestion buttons
-    suggestion_buttons = []
-    for i in range(num_suggestions):
-        suggestion_buttons.append(
-            InlineKeyboardButton(
-                text=f"✅ #{i + 1}",
-                callback_data=f"ub_send:{pending_key}:{i}",
-            )
+        from ..db import get_session
+        from .calendar_service import CalendarExtractionService, CalendarService
+
+        tzname = await _get_user_timezone(user_id)
+        candidates = await CalendarExtractionService().extract_events(
+            text=text,
+            tzname=tzname,
+            source_type=source_type,
+            source_name=source_name,
         )
-    if suggestion_buttons:
-        rows.append(suggestion_buttons)
+        if not candidates:
+            return []
 
-    if action_plan:
-        safe_pending = False
-        for index, step in enumerate(action_plan.get("steps", [])):
-            if step.get("status") == "done" or not _action_step_is_executable(step):
-                continue
-
-            if not step.get("requires_separate_approval"):
-                safe_pending = True
-
-            row = [
-                InlineKeyboardButton(
-                    text=f"▶️ Step {index + 1}",
-                    callback_data=f"ub_plan_step:{pending_key}:{index}",
+        created = []
+        async with get_session() as session:
+            for candidate in candidates:
+                event = await CalendarService.create_event(
+                    session,
+                    user_id=user_id,
+                    title=candidate["title"],
+                    starts_at=candidate["starts_at"],
+                    ends_at=candidate.get("ends_at"),
+                    all_day=bool(candidate.get("all_day", False)),
+                    source_type=source_type,
+                    source_name=source_name,
+                    source_chat_id=source_chat_id,
+                    source_message_id=source_message_id,
+                    remind_before_minutes=candidate.get("remind_before_minutes"),
                 )
-            ]
-            if _action_step_is_editable(step):
-                row.append(
-                    InlineKeyboardButton(
-                        text=f"✏️ Edit {index + 1}",
-                        callback_data=f"ub_plan_edit:{pending_key}:{index}",
-                    )
-                )
-            rows.append(row)
+                if event:
+                    created.append(event)
+        return created
+    except Exception as exc:
+        logger.debug("Userbot calendar extraction failed for user {}: {}", user_id, exc)
+        return []
 
-        plan_row: list[InlineKeyboardButton] = []
-        if safe_pending:
-            plan_row.append(
-                InlineKeyboardButton(
-                    text="✅ Run safe steps",
-                    callback_data=f"ub_plan_all:{pending_key}",
-                )
+
+async def _create_followup_event(
+    *,
+    user_id: int,
+    classification: dict,
+    sender_name: str,
+    summary: str,
+    source_type: str,
+    source_chat_id: int | None,
+    source_message_id: int | None,
+):
+    """Create a "reply by <time>" calendar event when a deadline was detected."""
+    try:
+        if not _classification_requires_response(classification):
+            return None
+        followup_at = classification.get("suggested_followup_at")
+        if not isinstance(followup_at, datetime):
+            return None
+
+        from ..db import get_session
+        from .calendar_service import CalendarService
+
+        async with get_session() as session:
+            return await CalendarService.create_event(
+                session,
+                user_id=user_id,
+                title=f"Ответить: {sender_name}",
+                starts_at=followup_at,
+                description=summary,
+                source_type=source_type,
+                source_name=sender_name,
+                source_chat_id=source_chat_id,
+                source_message_id=source_message_id,
+                remind_before_minutes=30,
             )
-        plan_row.append(
-            InlineKeyboardButton(
-                text="🚫 Dismiss plan",
-                callback_data=f"ub_plan_dismiss:{pending_key}",
-            )
+    except Exception as exc:
+        logger.debug(
+            "Userbot follow-up calendar event failed for user {}: {}", user_id, exc
         )
-        rows.append(plan_row)
-
-    # Edit and dismiss row
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="✏️ Edit",
-                callback_data=f"ub_edit:{pending_key}",
-            ),
-            InlineKeyboardButton(
-                text="🚫 Dismiss",
-                callback_data=f"ub_dismiss:{pending_key}",
-            ),
-        ]
-    )
-
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+        return None
 
 
-def _build_approval_keyboard(
-    pending_key: str, num_suggestions: int
-) -> InlineKeyboardMarkup:
-    return build_userbot_approval_keyboard(pending_key, num_suggestions)
+async def _format_calendar_lines(user_id: int, calendar_events: list) -> str:
+    if not calendar_events:
+        return ""
+    tzname = await _get_user_timezone(user_id)
+    from .calendar_service import format_local
+
+    lines = []
+    for event in calendar_events:
+        lines.append(
+            f"📅 <b>Добавила в календарь:</b> {_esc(event.title)} — "
+            f"{format_local(event.starts_at, tzname)}"
+        )
+    return "\n".join(lines)
+
+
+async def _get_user_timezone(user_id: int) -> str:
+    try:
+        from ..db import get_session
+        from ..models.users import User
+
+        async with get_session() as session:
+            user = await session.get(User, user_id)
+            if user and user.user_timezone:
+                return user.user_timezone
+    except Exception as exc:
+        logger.debug("Userbot: timezone lookup failed for user {}: {}", user_id, exc)
+    return "UTC"
 
 
 # ---------------------------------------------------------------------------
-# Reply burst batching
+# Message burst batching
 # ---------------------------------------------------------------------------
 
 
@@ -1259,10 +1053,7 @@ async def _enqueue_reply_batch_message(
     )
     redis = await _get_redis()
     try:
-        ttl_seconds = max(
-            app_settings.USERBOT_REPLY_TIMEOUT,
-            int(_reply_batch_delay_seconds()) + 60,
-        )
+        ttl_seconds = int(_reply_batch_delay_seconds()) + 120
         async with redis.pipeline(transaction=True) as pipe:
             pipe.rpush(batch_key, entry)
             pipe.expire(batch_key, ttl_seconds)
@@ -1368,170 +1159,8 @@ async def _check_group_notification_rate_limit(user_id: int, chat_id: int) -> bo
 
 
 # ---------------------------------------------------------------------------
-# Redis pending reply storage
+# Manual outgoing tracking
 # ---------------------------------------------------------------------------
-
-
-async def _store_pending_reply(
-    *,
-    user_id: int,
-    chat_id: int,
-    message_id: int,
-    sender_name: str,
-    sender_tg_id: int,
-    chat_type: str,
-    suggestions: list[str],
-    thread_id: int | None = None,
-) -> str:
-    """
-    Store a pending reply in Redis and return a unique key.
-    The key is used in callback_data to identify which reply to send.
-    """
-    # Short unique key: hash of user_id + chat_id + message_id + timestamp
-    raw = f"{user_id}:{chat_id}:{message_id}:{time.time()}"
-    short_hash = hashlib.sha256(raw.encode()).hexdigest()[:12]
-    pending_key = short_hash
-
-    data = {
-        "user_id": user_id,
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "sender_name": sender_name,
-        "sender_tg_id": sender_tg_id,
-        "chat_type": chat_type,
-        "suggestions": suggestions,
-        "thread_id": thread_id,
-    }
-
-    redis = await _get_redis()
-    try:
-        redis_key = f"ub_pending:{pending_key}"
-        await redis.setex(
-            redis_key,
-            app_settings.USERBOT_REPLY_TIMEOUT,
-            json.dumps(data, ensure_ascii=False),
-        )
-    finally:
-        await redis.aclose()
-
-    return pending_key
-
-
-async def get_pending_reply(pending_key: str) -> dict | None:
-    """Retrieve a pending reply from Redis. Returns None if expired or not found."""
-    redis = await _get_redis()
-    try:
-        raw = await redis.get(f"ub_pending:{pending_key}")
-        if not raw:
-            return None
-        return json.loads(raw)
-    finally:
-        await redis.aclose()
-
-
-async def delete_pending_reply(pending_key: str) -> None:
-    """Remove a pending reply from Redis after it's been handled."""
-    redis = await _get_redis()
-    try:
-        await redis.delete(f"ub_pending:{pending_key}", f"ub_action_plan:{pending_key}")
-    finally:
-        await redis.aclose()
-
-
-async def _store_pending_action_plan(*, pending_key: str, action_plan: dict) -> None:
-    """Store a pending action plan under the same key as its reply notification."""
-    redis = await _get_redis()
-    try:
-        await redis.setex(
-            f"ub_action_plan:{pending_key}",
-            app_settings.USERBOT_REPLY_TIMEOUT,
-            json.dumps(action_plan, ensure_ascii=False),
-        )
-    finally:
-        await redis.aclose()
-
-
-async def get_pending_action_plan(pending_key: str) -> dict | None:
-    redis = await _get_redis()
-    try:
-        raw = await redis.get(f"ub_action_plan:{pending_key}")
-        if not raw:
-            return None
-        return json.loads(raw)
-    finally:
-        await redis.aclose()
-
-
-async def save_pending_action_plan(pending_key: str, action_plan: dict) -> None:
-    redis = await _get_redis()
-    try:
-        await redis.setex(
-            f"ub_action_plan:{pending_key}",
-            app_settings.USERBOT_REPLY_TIMEOUT,
-            json.dumps(action_plan, ensure_ascii=False),
-        )
-    finally:
-        await redis.aclose()
-
-
-async def delete_pending_action_plan(pending_key: str) -> None:
-    redis = await _get_redis()
-    try:
-        await redis.delete(f"ub_action_plan:{pending_key}")
-    finally:
-        await redis.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Reply rate limiting
-# ---------------------------------------------------------------------------
-
-
-async def check_reply_rate_limit(user_id: int) -> bool:
-    """Return True if the user is under their daily reply limit (read-only check)."""
-    today_str = date.today().isoformat()
-    rate_key = f"ub_replies:{user_id}:{today_str}"
-
-    redis = await _get_redis()
-    try:
-        current = await redis.get(rate_key)
-        count = int(current) if current else 0
-        return count < app_settings.USERBOT_MAX_REPLIES_PER_DAY
-    finally:
-        await redis.aclose()
-
-
-async def increment_reply_counter(user_id: int) -> None:
-    """Increment the daily reply counter AFTER a successful send."""
-    today_str = date.today().isoformat()
-    rate_key = f"ub_replies:{user_id}:{today_str}"
-
-    redis = await _get_redis()
-    try:
-        async with redis.pipeline(transaction=True) as pipe:
-            pipe.incr(rate_key)
-            pipe.execute_command("EXPIRE", rate_key, 90_000, "NX")
-            await pipe.execute()
-    finally:
-        await redis.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Skip marker for bot-sent outgoing messages
-# ---------------------------------------------------------------------------
-
-
-async def mark_bot_sent_reply(user_id: int, chat_id: int) -> None:
-    """
-    Set a short-lived marker so the outgoing handler skips
-    messages sent by the bot (approved replies).
-    Called from userbot router after successful send.
-    """
-    redis = await _get_redis()
-    try:
-        await redis.setex(f"ub_skip_outgoing:{user_id}:{chat_id}", 15, "1")
-    finally:
-        await redis.aclose()
 
 
 async def _record_manual_outgoing(
@@ -1540,6 +1169,8 @@ async def _record_manual_outgoing(
     chat_id: int,
     message_id: int | None,
 ) -> None:
+    from .userbot_state_probe import cache_manual_outgoing
+
     await cache_manual_outgoing(
         user_id=user_id,
         chat_id=chat_id,
@@ -1616,6 +1247,13 @@ def _classification_requires_response(classification: dict) -> bool:
     return bool(raw)
 
 
+def _classification_importance(classification: dict) -> int:
+    try:
+        return max(1, min(5, int(classification.get("importance", 1) or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 async def _persist_incoming_thread(
     *,
     user_id: int,
@@ -1627,9 +1265,8 @@ async def _persist_incoming_thread(
     message_text: str,
     summary: str,
     classification: dict,
-    suggestions: list[str],
 ) -> int | None:
-    """Persist an incoming DM/group prompt through Worker B's thread service."""
+    """Persist an incoming DM/group prompt through the thread service."""
     try:
         from ..db import get_session
         from .userbot_thread_service import UserBotThreadService
@@ -1645,7 +1282,7 @@ async def _persist_incoming_thread(
                 sender_name=sender_name,
                 message_id=message_id,
                 message_text=message_text,
-                suggested_replies=suggestions,
+                suggested_replies=[],
                 classification={
                     **classification,
                     "message_summary": classification.get("message_summary")
@@ -1667,7 +1304,6 @@ async def _attach_thread_notification(
     thread_id: int | None,
     notification_chat_id: int | None,
     notification_message_id: int | None,
-    pending_key: str | None,
 ) -> None:
     try:
         from ..db import get_session
@@ -1681,7 +1317,6 @@ async def _attach_thread_notification(
                 thread_id=thread_id,
                 notification_chat_id=notification_chat_id,
                 notification_message_id=notification_message_id,
-                pending_key=pending_key,
             )
     except Exception as exc:
         logger.debug(
@@ -1734,13 +1369,6 @@ async def _cleanup_thread_notification(
     cleanup_target: dict,
     reason: str,
 ) -> None:
-    pending_key = cleanup_target.get("pending_key")
-    if pending_key:
-        try:
-            await delete_pending_reply(str(pending_key))
-        except Exception as exc:
-            logger.debug("Userbot pending cleanup failed ({}): {}", reason, exc)
-
     if not bot:
         return
 
@@ -1781,7 +1409,6 @@ async def _mark_latest_thread_replied(
     message_id: int | None,
     chat_type: str | None,
     reply_to_message_id: int | None,
-    reply_text: str,
 ) -> dict | None:
     """Mark the latest open thread in this chat as replied after a real outgoing message."""
     try:
@@ -1813,7 +1440,6 @@ def _short_summary(text: str, limit: int = 160) -> str:
     return compact[: limit - 3].rstrip() + "..."
 
 
-# ===========================================================================
 def _thread_summary(conversation_thread: list[dict], limit: int = 800) -> str:
     lines = []
     for msg in conversation_thread[-6:]:
@@ -1825,7 +1451,7 @@ def _thread_summary(conversation_thread: list[dict], limit: int = 800) -> str:
 
 
 # ===========================================================================
-# Context assembly for reply suggestions
+# Context assembly
 # ===========================================================================
 
 
@@ -1901,555 +1527,6 @@ async def _get_user_core_facts(user_id: int) -> list[str]:
     except Exception as exc:
         logger.debug("Failed to load core facts for user {}: {}", user_id, exc)
         return []
-
-
-async def _get_style_samples(user_id: int) -> list[str]:
-    """Retrieve the user's outgoing message samples from Redis."""
-    redis = await _get_redis()
-    try:
-        raw_list = await redis.lrange(f"ub_style:{user_id}", 0, -1)
-        samples = []
-        for raw in raw_list:
-            try:
-                entry = json.loads(raw)
-                samples.append(entry["text"])
-            except (json.JSONDecodeError, KeyError):
-                continue
-        return samples
-    finally:
-        await redis.aclose()
-
-
-async def _get_sender_relationship(user_id: int, sender_tg_id: int) -> str | None:
-    """Get cached sender relationship description from Redis."""
-    redis = await _get_redis()
-    try:
-        raw = await redis.get(f"ub_sender:{user_id}:{sender_tg_id}")
-        return raw.decode() if raw else None
-    finally:
-        await redis.aclose()
-
-
-async def _update_sender_relationship(
-    user_id: int, sender_tg_id: int, description: str
-) -> None:
-    """Cache the LLM-inferred sender relationship in Redis."""
-    redis = await _get_redis()
-    try:
-        await redis.setex(
-            f"ub_sender:{user_id}:{sender_tg_id}",
-            app_settings.USERBOT_SENDER_CACHE_TTL,
-            description,
-        )
-    finally:
-        await redis.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Action-plan context and validation
-# ---------------------------------------------------------------------------
-
-
-async def _fetch_action_target_candidates(
-    *,
-    client: TelegramClient,
-    event,
-    sender,
-    sender_name: str,
-    assistant_bot_id: int | None,
-) -> list[dict]:
-    """
-    Build an allowlist of private chats the action planner may target.
-    The LLM only receives refs; executable steps are accepted only if the ref
-    maps back to one of these candidates.
-    """
-    candidates: list[dict] = []
-    seen_chat_ids: set[int] = set()
-
-    def add_candidate(
-        *, ref: str, label: str, chat_id: int, username: str | None = None
-    ) -> None:
-        if _ids_equal(chat_id, assistant_bot_id) or chat_id in seen_chat_ids:
-            return
-        clean_label = _short_summary(label, 80)
-        if not clean_label:
-            return
-        seen_chat_ids.add(chat_id)
-        candidates.append(
-            {
-                "ref": ref,
-                "label": clean_label,
-                "chat_id": chat_id,
-                "username": username,
-            }
-        )
-
-    sender_id = _coerce_int(getattr(sender, "id", None))
-    if sender_id and not _is_telegram_bot_sender(sender):
-        sender_username = getattr(sender, "username", None)
-        target_chat_id = (
-            _event_chat_id(event) if getattr(event, "is_private", False) else sender_id
-        )
-        if target_chat_id:
-            add_candidate(
-                ref="sender",
-                label=sender_name,
-                chat_id=target_chat_id,
-                username=sender_username,
-            )
-
-    try:
-        limit = max(0, app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT)
-        index = 1
-        async for dialog in client.iter_dialogs(limit=limit):
-            if not getattr(dialog, "is_user", False):
-                continue
-            entity = getattr(dialog, "entity", None)
-            if not entity or _is_telegram_bot_sender(entity):
-                continue
-
-            chat_id = _coerce_int(
-                getattr(dialog, "id", None) or getattr(entity, "id", None)
-            )
-            if not chat_id:
-                continue
-            first = getattr(entity, "first_name", None) or ""
-            last = getattr(entity, "last_name", None) or ""
-            label = (
-                f"{first} {last}".strip()
-                or getattr(entity, "username", None)
-                or getattr(dialog, "name", None)
-                or f"user {chat_id}"
-            )
-            add_candidate(
-                ref=f"contact_{index}",
-                label=label,
-                chat_id=chat_id,
-                username=getattr(entity, "username", None),
-            )
-            index += 1
-    except Exception as exc:
-        logger.debug("Userbot action target fetch failed: {}", exc)
-
-    return candidates[: app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT + 1]
-
-
-def _action_target_prompt(candidates: list[dict]) -> str:
-    if not candidates:
-        return "No contact targets are safely resolvable."
-    lines = []
-    for candidate in candidates[: app_settings.USERBOT_ACTION_TARGET_DIALOG_LIMIT + 1]:
-        username = candidate.get("username")
-        suffix = f" (@{username})" if username else ""
-        lines.append(f"- {candidate['ref']}: {candidate['label']}{suffix}")
-    return "\n".join(lines)
-
-
-async def _generate_action_plan(
-    *,
-    user_id: int,
-    message_text: str,
-    sender_name: str,
-    chat_type: str,
-    conversation_thread: list[dict],
-    user_facts: list[str],
-    style_samples: list[str],
-    target_candidates: list[dict],
-) -> dict | None:
-    """
-    Ask the LLM for an optional multi-step action draft and validate it.
-    Returns None when a single reply is enough or the draft is unsafe.
-    """
-    try:
-        context_parts = [
-            f"Current UTC time: {datetime.now(timezone.utc).isoformat()}",
-            f"Chat type: {chat_type}",
-            f"Current sender: {sender_name}",
-            "Allowed contact target refs:\n" + _action_target_prompt(target_candidates),
-        ]
-        if user_facts:
-            context_parts.append(
-                "User facts:\n" + "\n".join(f"- {f}" for f in user_facts[:12])
-            )
-        if style_samples:
-            context_parts.append(
-                "Recent user writing style:\n"
-                + "\n".join(f"- {sample}" for sample in style_samples[:8])
-            )
-        if conversation_thread:
-            context_parts.append(
-                "Conversation:\n" + _thread_summary(conversation_thread, limit=1200)
-            )
-
-        response = await async_client.chat.completions.create(
-            model=app_settings.EXTRACTOR_MODEL_ID,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You draft safe multi-step Telegram action plans for a personal assistant.\n"
-                        "Return ONLY valid JSON.\n"
-                        'If one normal reply is enough, return {"should_propose": false, "steps": []}.\n'
-                        "Use a plan only when the incoming message likely needs coordination, "
-                        "a follow-up, a reminder, or contacting another known person.\n"
-                        "Allowed step types:\n"
-                        "- reply_to_sender: fields text, reason\n"
-                        "- send_message_to_contact: fields target_ref, text, reason; target_ref MUST be from the allowlist\n"
-                        "- create_reminder: fields message_text, reminder_datetime_iso, reason; ISO must include timezone when possible\n"
-                        "- ask_user_clarification: fields question, reason\n"
-                        "Never invent contact refs. Never include more than "
-                        f"{app_settings.USERBOT_ACTION_PLAN_MAX_STEPS} steps."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "<context>\n" + "\n\n".join(context_parts) + "\n</context>\n\n"
-                        f"<new_message>\n{sender_name}: {message_text[:800]}\n</new_message>"
-                    ),
-                },
-            ],
-            max_tokens=700,
-            temperature=0.2,
-        )
-        raw = (response.choices[0].message.content or "").strip()
-        parsed = _parse_json_object(raw)
-        return _sanitize_action_plan(parsed, target_candidates)
-    except Exception as exc:
-        logger.debug(
-            "Userbot action plan generation failed for user {}: {}", user_id, exc
-        )
-        return None
-
-
-def _parse_json_object(raw: str) -> dict:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise
-        value = json.loads(match.group(0))
-    if not isinstance(value, dict):
-        raise ValueError("Action plan JSON root must be an object")
-    return value
-
-
-def _sanitize_action_plan(raw_plan: dict, target_candidates: list[dict]) -> dict | None:
-    if not raw_plan.get("should_propose"):
-        return None
-
-    candidate_by_ref = {
-        str(candidate.get("ref")): candidate
-        for candidate in target_candidates
-        if candidate.get("ref")
-    }
-    steps: list[dict] = []
-    raw_steps = raw_plan.get("steps")
-    if not isinstance(raw_steps, list):
-        return None
-
-    for raw_step in raw_steps[: app_settings.USERBOT_ACTION_PLAN_MAX_STEPS]:
-        if not isinstance(raw_step, dict):
-            continue
-        step = _sanitize_action_step(raw_step, candidate_by_ref)
-        if step:
-            steps.append(step)
-
-    if not steps:
-        return None
-
-    return {
-        "title": _short_summary(
-            str(raw_plan.get("title") or "Suggested action plan"), 80
-        ),
-        "steps": steps,
-    }
-
-
-def _sanitize_action_step(
-    raw_step: dict, candidate_by_ref: dict[str, dict]
-) -> dict | None:
-    step_type = str(raw_step.get("type") or "").strip()
-    reason = _short_summary(str(raw_step.get("reason") or ""), 160)
-
-    if step_type == "reply_to_sender":
-        text = _short_summary(str(raw_step.get("text") or ""), 900)
-        if not text:
-            return None
-        return {
-            "type": "reply_to_sender",
-            "text": text,
-            "reason": reason,
-            "status": "pending",
-            "requires_separate_approval": False,
-        }
-
-    if step_type == "send_message_to_contact":
-        text = _short_summary(str(raw_step.get("text") or ""), 900)
-        target_ref = str(raw_step.get("target_ref") or "").strip()
-        target = candidate_by_ref.get(target_ref)
-        if not text:
-            return None
-        if not target:
-            target_name = _short_summary(
-                str(raw_step.get("target_name") or target_ref or "contact"), 80
-            )
-            return {
-                "type": "ask_user_clarification",
-                "question": f"Which Telegram chat should receive this draft for {target_name}?",
-                "draft_text": text,
-                "reason": reason,
-                "status": "pending",
-                "requires_separate_approval": False,
-            }
-        return {
-            "type": "send_message_to_contact",
-            "target_ref": target_ref,
-            "target_chat_id": target["chat_id"],
-            "target_label": target["label"],
-            "text": text,
-            "reason": reason,
-            "status": "pending",
-            "requires_separate_approval": True,
-        }
-
-    if step_type == "create_reminder":
-        message_text = _short_summary(str(raw_step.get("message_text") or ""), 500)
-        reminder_datetime_iso = _short_summary(
-            str(raw_step.get("reminder_datetime_iso") or ""), 80
-        )
-        if not message_text:
-            return None
-        return {
-            "type": "create_reminder",
-            "message_text": message_text,
-            "reminder_datetime_iso": reminder_datetime_iso,
-            "reason": reason,
-            "status": "pending",
-            "requires_separate_approval": False,
-        }
-
-    if step_type == "ask_user_clarification":
-        question = _short_summary(str(raw_step.get("question") or ""), 400)
-        if not question:
-            return None
-        return {
-            "type": "ask_user_clarification",
-            "question": question,
-            "reason": reason,
-            "status": "pending",
-            "requires_separate_approval": False,
-        }
-
-    return None
-
-
-def _format_action_plan_for_notification(action_plan: dict) -> str:
-    steps = action_plan.get("steps") or []
-    if not steps:
-        return ""
-
-    lines = ["\n🧭 <b>Suggested action plan:</b>"]
-    for index, step in enumerate(steps, 1):
-        lines.append(f"{index}. {_esc(_describe_action_step(step))}")
-    return "\n".join(lines) + "\n"
-
-
-def _describe_action_step(step: dict) -> str:
-    step_type = step.get("type")
-    if step_type == "reply_to_sender":
-        return f"Reply here: {step.get('text', '')}"
-    if step_type == "send_message_to_contact":
-        return f"Message {step.get('target_label', 'contact')}: {step.get('text', '')}"
-    if step_type == "create_reminder":
-        when = step.get("reminder_datetime_iso") or "time not set"
-        return f"Create reminder ({when}): {step.get('message_text', '')}"
-    if step_type == "ask_user_clarification":
-        draft = step.get("draft_text")
-        suffix = f" Draft: {draft}" if draft else ""
-        return f"Ask you: {step.get('question', '')}{suffix}"
-    return "Review suggested action"
-
-
-def _action_step_is_executable(step: dict) -> bool:
-    if step.get("type") in {"reply_to_sender", "send_message_to_contact"}:
-        return bool(step.get("text"))
-    if step.get("type") == "create_reminder":
-        return bool(step.get("message_text") and step.get("reminder_datetime_iso"))
-    return False
-
-
-def _action_step_is_editable(step: dict) -> bool:
-    return step.get("type") in {"reply_to_sender", "send_message_to_contact"}
-
-
-async def _auto_run_and_hide_reminder_steps(
-    *,
-    user_id: int,
-    source_chat_id: int,
-    sender_tg_id: int,
-    owner_tg_chat_id: int,
-    action_plan: dict,
-    bot: "Bot",
-) -> dict | None:
-    """
-    Execute reminder steps silently and remove them from the user-visible plan.
-    Sending messages to people still requires explicit approval elsewhere.
-    """
-    steps = action_plan.get("steps")
-    if not isinstance(steps, list):
-        return action_plan
-
-    visible_steps: list[dict] = []
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        if step.get("type") != "create_reminder":
-            visible_steps.append(step)
-            continue
-
-        if step.get("status") != "done":
-            ok, job_id_or_error = await _run_auto_reminder_step(
-                user_id=user_id,
-                source_chat_id=source_chat_id,
-                sender_tg_id=sender_tg_id,
-                owner_tg_chat_id=owner_tg_chat_id,
-                step=step,
-                bot=bot,
-            )
-            if ok:
-                step["status"] = "done"
-                step["job_id"] = job_id_or_error
-            else:
-                step["status"] = "failed"
-                step["error"] = job_id_or_error
-
-    if not visible_steps:
-        return None
-
-    return {**action_plan, "steps": visible_steps}
-
-
-async def _run_auto_reminder_step(
-    *,
-    user_id: int,
-    source_chat_id: int,
-    sender_tg_id: int,
-    owner_tg_chat_id: int,
-    step: dict,
-    bot: "Bot",
-) -> tuple[bool, str]:
-    message_text = (step.get("message_text") or "").strip()
-    reminder_datetime_iso = (step.get("reminder_datetime_iso") or "").strip()
-    if not message_text or not reminder_datetime_iso:
-        return False, "Reminder step is missing required data."
-
-    try:
-        from ..db import get_session
-        from .tool_executor import ToolExecutor
-
-        async with get_session() as session:
-            executor = ToolExecutor(session=session, bot=bot)
-            existing_job_id = await _get_auto_reminder_job_id(
-                user_id=user_id,
-                source_chat_id=source_chat_id,
-                sender_tg_id=sender_tg_id,
-                message_text=message_text,
-            )
-            if existing_job_id:
-                await executor._cancel_reminder({"job_id": existing_job_id}, user_id)
-
-            result = await executor._schedule_reminder(
-                {
-                    "message_text": message_text,
-                    "reminder_datetime_iso": reminder_datetime_iso,
-                },
-                chat_id=owner_tg_chat_id,
-                user_id=user_id,
-            )
-    except Exception as exc:
-        logger.debug("Userbot automatic reminder failed for user {}: {}", user_id, exc)
-        return False, "Failed to create reminder."
-
-    if not result.get("success"):
-        return False, str(result.get("error") or "Failed to create reminder.")
-
-    job_id = str(result.get("job_id") or "")
-    if job_id:
-        await _set_auto_reminder_job_id(
-            user_id=user_id,
-            source_chat_id=source_chat_id,
-            sender_tg_id=sender_tg_id,
-            message_text=message_text,
-            job_id=job_id,
-        )
-    logger.info(
-        "Userbot: silently scheduled reminder for user {} (job_id={})", user_id, job_id
-    )
-    return True, job_id
-
-
-def _auto_reminder_key(
-    *,
-    user_id: int,
-    source_chat_id: int,
-    sender_tg_id: int,
-    message_text: str,
-) -> str:
-    normalized = re.sub(r"\s+", " ", message_text).strip().lower()[:200]
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return f"ub_auto_reminder:{user_id}:{source_chat_id}:{sender_tg_id}:{digest}"
-
-
-async def _get_auto_reminder_job_id(
-    *,
-    user_id: int,
-    source_chat_id: int,
-    sender_tg_id: int,
-    message_text: str,
-) -> str | None:
-    redis = await _get_redis()
-    try:
-        raw = await redis.get(
-            _auto_reminder_key(
-                user_id=user_id,
-                source_chat_id=source_chat_id,
-                sender_tg_id=sender_tg_id,
-                message_text=message_text,
-            )
-        )
-        return raw.decode() if raw else None
-    finally:
-        await redis.aclose()
-
-
-async def _set_auto_reminder_job_id(
-    *,
-    user_id: int,
-    source_chat_id: int,
-    sender_tg_id: int,
-    message_text: str,
-    job_id: str,
-) -> None:
-    redis = await _get_redis()
-    try:
-        await redis.setex(
-            _auto_reminder_key(
-                user_id=user_id,
-                source_chat_id=source_chat_id,
-                sender_tg_id=sender_tg_id,
-                message_text=message_text,
-            ),
-            90 * 86_400,
-            job_id,
-        )
-    finally:
-        await redis.aclose()
 
 
 # ===========================================================================
@@ -2675,186 +1752,6 @@ async def _save_notification_to_history(*, tg_chat_id: int, text: str) -> None:
         logger.debug("Failed to save notification to history: {}", exc)
 
 
-async def _generate_reply_suggestions(
-    *,
-    user_id: int,
-    message_text: str,
-    sender_name: str,
-    sender_tg_id: int,
-    conversation_thread: list[dict],
-    user_facts: list[str],
-    style_samples: list[str],
-    sender_relationship: str | None,
-) -> list[str]:
-    """
-    Generate 3 reply suggestions that sound like the user themselves would write.
-
-    Uses rich context: user profile, communication style samples,
-    conversation history, and sender relationship.
-    """
-    _fallback: list[str] = []
-    try:
-        # --- Build the system prompt ---
-        system_parts = [
-            "You are ghostwriting replies for a real person. "
-            "Your goal is to write EXACTLY as this person would — "
-            "same language, tone, formality, emoji usage, message length, and style."
-        ]
-
-        # User profile
-        if user_facts:
-            facts_block = "\n".join(f"- {f}" for f in user_facts[:20])
-            system_parts.append(f"\n<user_profile>\n{facts_block}\n</user_profile>")
-
-        # Communication style samples (few-shot examples of how the user writes)
-        if style_samples:
-            # Show most recent 15 samples
-            samples_block = "\n".join(f'- "{s}"' for s in style_samples[:15])
-            system_parts.append(
-                "\n<communication_style>\n"
-                "Here are real messages this person recently sent. "
-                "Mimic their language, length, tone, and quirks:\n"
-                f"{samples_block}\n"
-                "</communication_style>"
-            )
-
-        # Sender relationship
-        if sender_relationship:
-            system_parts.append(
-                f"\n<sender_relationship>\n"
-                f"{sender_name}: {sender_relationship}\n"
-                f"</sender_relationship>"
-            )
-
-        system_parts.append(
-            "\nGenerate exactly 3 reply options.\n"
-            "Each reply should sound natural and authentic to this person.\n"
-            "Output one reply per line, no numbering, no quotes, no extra text.\n"
-            "Match the language of the conversation."
-        )
-
-        system_prompt = "\n".join(system_parts)
-
-        # --- Build the user prompt with conversation thread ---
-        user_parts = []
-
-        if conversation_thread:
-            thread_lines = []
-            for msg in conversation_thread:
-                role_label = "ME" if msg["is_me"] else msg["name"]
-                thread_lines.append(f"[{role_label}]: {msg['text']}")
-            thread_block = "\n".join(thread_lines)
-            user_parts.append(
-                f"<conversation_history>\n{thread_block}\n</conversation_history>\n"
-            )
-
-        user_parts.append(
-            f"<new_message>\n"
-            f"[{sender_name}]: {message_text[:500]}\n"
-            f"</new_message>\n\n"
-            f"Write 3 reply options as ME:"
-        )
-
-        user_prompt = "\n".join(user_parts)
-
-        response = await async_client.chat.completions.create(
-            model=app_settings.EXTRACTOR_MODEL_ID,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=300,
-            temperature=0.7,
-        )
-        raw = (response.choices[0].message.content or "").strip()
-        lines = [
-            line.strip().strip('"').strip("'")
-            for line in raw.splitlines()
-            if line.strip()
-        ]
-        # Remove any numbering like "1. " or "1) "
-        cleaned = []
-        for line in lines:
-            cleaned_line = re.sub(r"^\d+[\.\)]\s*", "", line).strip()
-            if cleaned_line:
-                cleaned.append(cleaned_line)
-        suggestions = cleaned[:3] if cleaned else _fallback
-
-        # --- Infer sender relationship in background if not cached ---
-        if not sender_relationship and conversation_thread:
-            asyncio.create_task(
-                _infer_and_cache_sender_relationship(
-                    user_id=user_id,
-                    sender_tg_id=sender_tg_id,
-                    sender_name=sender_name,
-                    conversation_thread=conversation_thread,
-                )
-            )
-
-        return suggestions
-
-    except Exception as exc:
-        logger.warning("Userbot reply suggestion LLM error: {}", exc)
-        return _fallback
-
-
-async def _infer_and_cache_sender_relationship(
-    *,
-    user_id: int,
-    sender_tg_id: int,
-    sender_name: str,
-    conversation_thread: list[dict],
-) -> None:
-    """
-    Ask the LLM to infer the relationship between the user and sender
-    based on conversation context. Cache the result in Redis.
-    """
-    try:
-        # Build a short conversation summary for the LLM
-        thread_lines = []
-        for msg in conversation_thread[-6:]:
-            role = "User" if msg["is_me"] else msg["name"]
-            thread_lines.append(f"{role}: {msg['text'][:150]}")
-        thread_text = "\n".join(thread_lines)
-
-        response = await async_client.chat.completions.create(
-            model=app_settings.EXTRACTOR_MODEL_ID,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Based on the conversation below, describe the relationship "
-                        "between the user and the other person in 5-10 words. "
-                        "Examples: 'close friend, informal tone', 'work colleague', "
-                        "'boss/manager, formal', 'family member', 'acquaintance'. "
-                        "Reply with ONLY the relationship description, nothing else."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Conversation between the user and {sender_name}:\n"
-                        f"{thread_text}\n\n"
-                        f"Relationship:"
-                    ),
-                },
-            ],
-            max_tokens=30,
-            temperature=0,
-        )
-        description = (response.choices[0].message.content or "").strip()
-        if description and len(description) < 100:
-            await _update_sender_relationship(user_id, sender_tg_id, description)
-            logger.info(
-                "Userbot: inferred relationship for user {} ↔ {}: {}",
-                user_id,
-                sender_name,
-                description,
-            )
-    except Exception as exc:
-        logger.debug("Sender relationship inference failed: {}", exc)
-
-
 # ---------------------------------------------------------------------------
 # DB / Redis helpers
 # ---------------------------------------------------------------------------
@@ -2886,12 +1783,6 @@ async def _get_channel_interests(user_id: int) -> str:
     if settings and settings.userbot_channel_interests:
         return settings.userbot_channel_interests
     return "technology, science, business, current events, health"
-
-
-async def _get_tg_chat_id(user_id: int) -> int | None:
-    """Look up the Telegram chat_id (tg_chat_id) for sending bot notifications."""
-    chat_id, _ = await _get_tg_delivery(user_id)
-    return chat_id
 
 
 async def _get_tg_delivery(user_id: int) -> tuple[int | None, dict[str, int]]:
@@ -2982,4 +1873,4 @@ def _is_telegram_bot_sender(sender) -> bool:
 
 def _esc(text: str) -> str:
     """Escape HTML special characters for Telegram HTML parse mode."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

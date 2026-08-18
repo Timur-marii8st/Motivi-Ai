@@ -11,16 +11,13 @@ from ..config import settings as app_settings
 
 
 def read_marker_ttl_seconds() -> int:
-    """Keep read cursors long enough to cover delayed follow-up decisions."""
-    followup_window = (
-        int(app_settings.USERBOT_DEFAULT_FOLLOWUP_MINUTES) * 60
-        + int(app_settings.USERBOT_FOLLOWUP_REMINDER_COOLDOWN_HOURS) * 3600
-        + 3600
-    )
-    return max(30 * 86_400, followup_window)
+    """Keep read cursors for a month to cover delayed processing decisions."""
+    return 30 * 86_400
 
 
-async def cache_read_marker(user_id: int, chat_id: int, max_read_message_id: int) -> None:
+async def cache_read_marker(
+    user_id: int, chat_id: int, max_read_message_id: int
+) -> None:
     if max_read_message_id <= 0:
         return
     redis = await _get_redis()

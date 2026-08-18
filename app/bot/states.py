@@ -1,5 +1,6 @@
 from aiogram.fsm.state import StatesGroup, State
 
+
 class Onboarding(StatesGroup):
     name = State()
     timezone = State()
@@ -8,10 +9,12 @@ class Onboarding(StatesGroup):
     occupation = State()
     confirm = State()
 
+
 class HabitCreation(StatesGroup):
     name = State()
     cadence = State()
     reminder = State()
+
 
 class ProfileEdit(StatesGroup):
     name = State()
@@ -21,35 +24,30 @@ class ProfileEdit(StatesGroup):
     bed_time = State()
     goals = State()
 
+
 class TriggerCreation(StatesGroup):
     name = State()
     prompt = State()
     schedule = State()
     weekdays = State()
 
+
 class UserBotSetup(StatesGroup):
     """FSM states for connecting a personal Telegram account (MTProto userbot)."""
-    waiting_qr = State()        # waiting for QR / tg://login confirmation
+
+    waiting_qr = State()  # waiting for QR / tg://login confirmation
     waiting_password = State()  # waiting for 2FA cloud password (if enabled)
-
-
-class UserBotReplyEdit(StatesGroup):
-    """FSM state for editing a userbot reply before sending."""
-    waiting_text = State()      # waiting for the user to type a custom reply
-
-
-class UserBotActionStepEdit(StatesGroup):
-    """FSM state for editing one userbot action-plan message before sending."""
-    waiting_text = State()
 
 
 class HabitStacking(StatesGroup):
     """FSM for confirming habit stacking suggestions."""
+
     confirm_stack = State()
 
 
 class PersonaCustomization(StatesGroup):
     """FSM for persona customization flow."""
+
     select_tone = State()
     select_emoji = State()
     select_length = State()

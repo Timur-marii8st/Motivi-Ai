@@ -26,7 +26,8 @@
 * **🔍 Web Search**: Real-time web and news search via Tavily API. Force search with prefixes `!!`, `!search`, or `!поиск`.
 * **💻 Sandboxed Code Execution**: The LLM can run Python, JavaScript, and shell code inside isolated Docker containers with strict security limits (no network, read-only FS, memory/CPU caps).
 * **🛠️ Agent Skills**: Progressive loading of 7 specialist skills (CV, data analysis, Excel, PowerPoint, project/study planning, Word docs) via Markdown files.
-* **🤖 Telegram Userbot (MTProto)**: Connect your personal Telegram account via Telethon for channel monitoring, DM/group reply suggestions with approval flow, persistent follow-up tracking, and batched notifications.
+* **🤖 Telegram Userbot (MTProto)**: Connect your personal Telegram account via Telethon for read-only monitoring: channel post notifications, important DM/group notifications, and automatic extraction of deadlines/meetings into Motivi's internal calendar with reminders. Motivi never sends messages on your behalf.
+* **📅 Internal Calendar**: Motivi keeps her own calendar inside the bot. Events are created automatically from messages and channel posts, via chat requests, or manually; each event gets an automatic reminder. Manage them with `/calendar`.
 * **🎮 Gamification**: XP, levels, badges, leaderboards, message streaks, and variable rewards — feature-flagged and opt-in.
 * **👤 Personas**: Choose a bot personality (`strict`, `friendly`, `coach`, `zen`, `hype`) via `/persona`.
 * **🧩 Custom Triggers**: Users can define their own recurring proactive prompts (`/triggers`, `/add_trigger`), max 5 per user.
@@ -118,18 +119,18 @@ Send `/commands` in Telegram for the full list. Key commands:
 |---|---|
 | **General** | `/start`, `/help`, `/commands`, `/cancel`, `/settings`, `/profile`, `/break`, `/export_data` |
 | **Habits & Plans** | `/habits`, `/add_habit`, `/log_habit <id>`, `/triggers`, `/add_trigger` |
-| **Calendar & Memory** | `/connect_calendar`, `/my_memories`, `/correct`, `/story`, `/persona` |
-| **Userbot** | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests`, `/userbot_pending` |
+| **Calendar & Memory** | `/calendar`, `/connect_calendar`, `/my_memories`, `/correct`, `/story`, `/persona` |
+| **Userbot** | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests` |
 | **Subscription & Progress** | `/subscribe`, `/referral`, `/level`, `/badges`, `/leaderboard` |
 | **Admin** | `/admin_stats`, `/admin_broadcast` |
 
-### 🤖 Userbot Reply Lifecycle
+### 🤖 Userbot Monitoring & Calendar
 
-The Telethon userbot monitors incoming DMs and relevant group messages, then waits for a short debounce/read-check window before calling the LLM. If the message is already read, no quick-reply notification is created.
+The Telethon userbot monitors the connected account **read-only**: it never sends messages on behalf of the user. Incoming DMs and relevant group messages wait through a short debounce/read-check window before the LLM is called; already-read or already-answered messages are skipped.
 
-For messages that pass the script checks, the LLM classifies whether a reply is actually needed and, if so, stores a persistent thread with an optional follow-up deadline. Quick-reply notifications remember their bot message id and Redis pending key, so later MTProto events can clean them up.
+Messages that pass these checks are classified. Important ones produce a notification, and any concrete dates/deadlines found in the text (meetings, calls, deadlines, dated events) are extracted into Motivi's internal calendar with automatic reminders. When a message expects an answer by a specific time, a "reply by" calendar event is created.
 
-If the user replies manually from their Telegram account, the thread is marked `replied`, pending buttons/action plans are invalidated, the bot's quick-reply notification is deleted, and no follow-up reminder is sent. If the user only reads the message, the quick-reply notification is removed, but the persistent thread can still remind later when the LLM classified the message as requiring a response.
+If the user replies manually from their Telegram account, the tracked thread is marked `replied` and the bot's notification is cleaned up. If the user only reads the message, the notification is removed. Channel posts are scored for relevance: high-scoring posts notify immediately (and feed the calendar), medium posts are batched into periodic digests.
 
 ### 📂 Project Structure
 
@@ -156,8 +157,9 @@ app/
     conversation_history_service.py  # Redis-backed chat history
     proactive_planning_service.py    # Smart LLM planner
     userbot_manager.py       # Telethon lifecycle
-    userbot_monitor.py       # Channel/DM/group event handlers
-    userbot_thread_service.py# Persistent reply/follow-up tracking
+    userbot_monitor.py       # Channel/DM/group event handlers + calendar extraction
+    userbot_thread_service.py# Persistent thread/notification tracking
+    calendar_service.py      # Internal calendar CRUD + LLM event extraction
     subscription_service.py  # Trial/premium/admin status & payments
     event_bus.py             # Feature-flagged async domain event bus
     analytics_service.py     # Gamification event persistence
@@ -227,7 +229,8 @@ Key env variables (see `.env.example` for the full list):
 * **🔍 Веб-поиск**: Поиск в интернете и новостей через Tavily API. Принудительный поиск префиксами `!!`, `!search`, `!поиск`.
 * **💻 Песочница для кода**: LLM может запускать Python, JavaScript и shell-код в изолированных Docker-контейнерах с жёсткими лимитами безопасности.
 * **🛠️ Агентские скиллы**: Прогрессивная загрузка 7 специалистских навыков (CV, анализ данных, Excel, PowerPoint, планировщик проектов/учёбы, Word) через Markdown-файлы.
-* **🤖 Юзербот (MTProto)**: Подключение личного Telegram-аккаунта через Telethon для мониторинга каналов, предложений ответов в ЛС/группах с апрувом, персистентных follow-up тредов и пакетных уведомлений.
+* **🤖 Юзербот (MTProto)**: Подключение личного Telegram-аккаунта через Telethon в режиме read-only: уведомления о постах каналов и важных сообщениях, автоматическое извлечение дедлайнов и встреч во внутренний календарь Мотиви с напоминаниями. Мотиви никогда не отправляет сообщения от вашего имени.
+* **📅 Внутренний календарь**: У Мотиви свой календарь внутри бота. События создаются автоматически из сообщений людей и каналов, по просьбе в чате или вручную; у каждого события автоматическое напоминание. Управление — через `/calendar`.
 * **🎮 Геймификация**: XP, уровни, значки, лидерборды, стрики сообщений и переменные награды — под фиче-флагами и по желанию.
 * **👤 Персонажи**: Выбор личности бота (`strict`, `friendly`, `coach`, `zen`, `hype`) через `/persona`.
 * **🧩 Пользовательские триггеры**: Собственные регулярные проактивные напоминания (`/triggers`, `/add_trigger`), максимум 5 на пользователя.
@@ -319,18 +322,18 @@ Key env variables (see `.env.example` for the full list):
 |---|---|
 | **Основное** | `/start`, `/help`, `/commands`, `/cancel`, `/settings`, `/profile`, `/break`, `/export_data` |
 | **Привычки и планы** | `/habits`, `/add_habit`, `/log_habit <id>`, `/triggers`, `/add_trigger` |
-| **Календарь и память** | `/connect_calendar`, `/my_memories`, `/correct`, `/story`, `/persona` |
-| **Юзербот** | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests`, `/userbot_pending` |
+| **Календарь и память** | `/calendar`, `/connect_calendar`, `/my_memories`, `/correct`, `/story`, `/persona` |
+| **Юзербот** | `/connect_userbot`, `/disconnect_userbot`, `/userbot_interests` |
 | **Подписка и прогресс** | `/subscribe`, `/referral`, `/level`, `/badges`, `/leaderboard` |
 | **Админ** | `/admin_stats`, `/admin_broadcast` |
 
-### 🤖 Жизненный цикл ответов юзербота
+### 🤖 Мониторинг юзербота и календарь
 
-Telethon-юзербот отслеживает входящие ЛС и релевантные сообщения в группах, затем ждёт короткое окно debounce/read-check перед вызовом LLM. Если сообщение уже прочитано, уведомление с быстрым ответом не создаётся.
+Telethon-юзербот отслеживает подключённый аккаунт **только для чтения**: он никогда не отправляет сообщения от имени пользователя. Входящие ЛС и релевантные сообщения в группах проходят короткое окно debounce/read-check перед вызовом LLM; уже прочитанные или уже отвеченные сообщения пропускаются.
 
-Для сообщений, прошедших скриптовые проверки, LLM классифицирует, нужен ли ответ на самом деле, и при необходимости сохраняет персистентный тред с возможным дедлайном follow-up. Уведомления с быстрыми ответами запоминают id сообщения бота и Redis pending key, чтобы последующие MTProto-события могли их убрать.
+Сообщения, прошедшие проверки, классифицируются. Важные порождают уведомление, а найденные в тексте конкретные даты и дедлайны (встречи, звонки, дедлайны, события с датой) извлекаются во внутренний календарь Мотиви с автоматическими напоминаниями. Если сообщение ждёт ответа к определённому времени, создаётся событие календаря «ответить до».
 
-Если пользователь отвечает вручную из своего Telegram-аккаунта, тред помечается как `replied`, pending-кнопки/action plan инвалидируются, сообщение бота с предложением ответа удаляется, а follow-up больше не отправляется. Если пользователь только прочитал сообщение, quick-reply уведомление удаляется, но персистентный тред может напомнить позже, если LLM классифицировал сообщение как требующее ответа.
+Если пользователь отвечает вручную из своего Telegram-аккаунта, тред помечается как `replied`, а уведомление бота убирается. Если пользователь только прочитал сообщение, уведомление удаляется. Посты каналов оцениваются по релевантности: высокооценённые сразу уведомляют (и питают календарь), среднеоценённые собираются в периодические дайджесты.
 
 ### 📂 Структура проекта
 
@@ -357,8 +360,9 @@ app/
     conversation_history_service.py  # История диалогов в Redis
     proactive_planning_service.py    # Умный LLM-планировщик
     userbot_manager.py       # Жизненный цикл Telethon
-    userbot_monitor.py       # Обработчики событий каналов/ЛС/групп
-    userbot_thread_service.py# Персистентные треды и follow-up
+    userbot_monitor.py       # Обработчики событий каналов/ЛС/групп + извлечение в календарь
+    userbot_thread_service.py# Персистентные треды и уведомления
+    calendar_service.py      # Внутренний календарь: CRUD + LLM-извлечение событий
     subscription_service.py  # Логика trial/premium/admin и платежей
     event_bus.py             # Асинхная шина событий под фиче-флагами
     analytics_service.py     # Персистентность геймификационных событий

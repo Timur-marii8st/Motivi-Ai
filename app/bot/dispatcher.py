@@ -24,11 +24,13 @@ from .routers.subscription import router as subscription_router
 from .routers.group import router as group_router
 from .routers.triggers import router as triggers_router
 from .routers.userbot import router as userbot_router
+from .routers.calendar import router as calendar_router
 from .routers.gamification import router as gamification_router
 from .routers.referral import router as referral_router
 from .routers.story import router as story_router
 from .routers.memories import router as memories_router
 from .routers.persona import persona_router
+
 
 def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     session = None
@@ -43,10 +45,10 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     )
 
     redis_client = Redis.from_url(settings.REDIS_URL)
-    
+
     # Use RedisStorage for persistent FSM state across workers/restarts
     storage = RedisStorage(redis=redis_client)
-    
+
     dp = Dispatcher(storage=storage)
 
     # Middlewares
@@ -67,6 +69,7 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     dp.include_router(group_router)
     dp.include_router(triggers_router)
     dp.include_router(userbot_router)
+    dp.include_router(calendar_router)
     dp.include_router(persona_router)
     dp.include_router(gamification_router)
     dp.include_router(referral_router)
@@ -75,8 +78,8 @@ def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     dp.include_router(multimodal_router)
     dp.include_router(chat_router)
     dp.include_router(common_router)
-    
-    # Note: The redis_client created here will be closed automatically 
+
+    # Note: The redis_client created here will be closed automatically
     # by aiogram when the dispatcher is shut down.
-    
+
     return bot, dp

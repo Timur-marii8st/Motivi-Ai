@@ -54,11 +54,18 @@ class UserSettings(SQLModel, table=True):
     # --- User Bot (MTProto monitoring) ---
     # Whether to send a notification when an interesting channel post arrives
     enable_channel_monitoring: bool = Field(default=True)
-    # Whether to send a notification with reply suggestions for incoming DMs
+    # Whether to send notifications about important incoming DMs
     enable_dm_notifications: bool = Field(default=True)
-    # Whether to monitor group/supergroup messages and suggest replies
+    # Whether to monitor group/supergroup messages that mention/reply to the user
     enable_group_monitoring: bool = Field(default=False)
-    # Whether to show approval buttons on DM/group reply suggestions
+    # Whether the LLM extracts calendar events from incoming messages/posts
+    # and Motivi reminds the user about them.
+    enable_calendar_extraction: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="true"),
+    )
+    # Deprecated: quick-reply approval flow was removed. Columns are kept for
+    # existing databases/exports.
     enable_reply_approval: bool = Field(default=True)
     enable_userbot_followups: bool = Field(
         default=True,

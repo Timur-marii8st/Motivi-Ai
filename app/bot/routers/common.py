@@ -34,6 +34,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     (
         "Календарь и память",
         [
+            ("/calendar", "календарь Мотиви с событиями и напоминаниями"),
             ("/connect_calendar", "подключить Google Calendar"),
             ("/my_memories", "посмотреть сохраненные факты"),
             ("/correct", "исправить память о себе"),
@@ -47,7 +48,6 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("/connect_userbot", "подключить личный Telegram-аккаунт"),
             ("/disconnect_userbot", "отключить юзербот"),
             ("/userbot_interests", "настроить интересы для каналов"),
-            ("/userbot_pending", "очередь ожидающих reply suggestions"),
         ],
     ),
     (
