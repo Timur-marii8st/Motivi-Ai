@@ -26,6 +26,12 @@
     restart: unless-stopped
     networks:
       - motivi-network
+    # Keep a runaway app from taking down the whole VM (OOM killer hit uvicorn
+    # at ~2.8GB RSS on 2026-08-18). Container restarts instead of host outage.
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
 
   db:
     image: pgvector/pgvector:pg16
@@ -40,6 +46,10 @@
     restart: unless-stopped
     networks:
       - motivi-network
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
 
   redis:
     image: redis:7-alpine
