@@ -40,17 +40,54 @@ async def _process_telegram_update(update: Update) -> None:
         )
 
 
+async def _telegram_connect_loop() -> None:
+    """Connect to Telegram (webhook or polling), retrying until success.
+
+    Keeps the app alive while the Bot API is unreachable (dead proxy, network
+    outage) instead of crash-looping uvicorn.
+    """
+    global polling_task
+    attempt = 0
+    while True:
+        try:
+            if settings.TELEGRAM_USE_POLLING:
+                await bot.delete_webhook(drop_pending_updates=False)
+                if polling_task is None or polling_task.done():
+                    polling_task = asyncio.create_task(dp.start_polling(bot))
+                logger.info("Telegram polling started")
+            else:
+                webhook_url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook"
+                await bot.set_webhook(
+                    url=webhook_url, secret_token=settings.TELEGRAM_WEBHOOK_SECRET
+                )
+                logger.info(f"Webhook set to {webhook_url}")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            attempt += 1
+            delay = min(60, 10 * attempt)
+            logger.warning(
+                "Telegram connect attempt {} failed: {}; retrying in {}s",
+                attempt,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global polling_task
 
     # --- startup ---
     logger.remove()
     logger.add(lambda msg: print(msg, end=""), level=settings.LOG_LEVEL)
-    
+
     await init_db()
     start_scheduler()
     try:
         from .scheduler.job_manager import JobManager
+
         async with get_session() as session:
             await JobManager.reschedule_all_user_jobs(session)
     except Exception as exc:
@@ -59,6 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Register gamification event listeners ──
     from .services.event_bus import event_bus
     from .services.analytics_service import persist_event
+
     event_bus.on_all(persist_event)  # Analytics sink — logs all events to DB
 
     # Import gamification modules to wire their event bus listeners
@@ -66,20 +104,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     import app.services.gamification.badge_service  # noqa: F401
     import app.services.gamification.reward_service  # noqa: F401
     import app.services.gamification.leaderboard_service  # noqa: F401
+
     logger.info("Gamification event listeners registered")
 
     # Start MTProto userbot clients (read-only monitoring of connected accounts)
     from .services.userbot_manager import UserBotManager
+
     await UserBotManager.start_all(bot)
 
-    if settings.TELEGRAM_USE_POLLING:
-        await bot.delete_webhook(drop_pending_updates=False)
-        polling_task = asyncio.create_task(dp.start_polling(bot))
-        logger.info("Telegram polling started")
-    else:
-        webhook_url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook"
-        await bot.set_webhook(url=webhook_url, secret_token=settings.TELEGRAM_WEBHOOK_SECRET)
-        logger.info(f"Webhook set to {webhook_url}")
+    # Telegram connectivity is retried in the background so a dead proxy or a
+    # transient network outage cannot crash-loop the whole app.
+    asyncio.create_task(_telegram_connect_loop())
     logger.info("Motivi_AI started successfully")
 
     # Передаём управление FastAPI (запуск приложения)
@@ -87,6 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # --- shutdown ---
     from .services.userbot_manager import UserBotManager as _UBM
+
     if polling_task is not None:
         polling_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -110,22 +146,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Motivi_AI", lifespan=lifespan)
 
+
 @app.get("/oauth/google/callback")
 async def oauth_google_callback(code: str, state: str):
     """
     Handles the OAuth callback from Google.
     """
     logger.info("Received Google OAuth callback with state: {}", state)
-    
+
     # 1. Verify the state token
     user_info = await OAuthStateService.verify_and_consume_state(state)
     if not user_info:
         logger.warning("Invalid or expired OAuth state token received: {}", state)
-        raise HTTPException(status_code=400, detail="Invalid or expired session. Please try again.")
+        raise HTTPException(
+            status_code=400, detail="Invalid or expired session. Please try again."
+        )
 
     user_id = user_info["user_id"]
     chat_id = user_info["chat_id"]
-    
+
     # 2. Exchange the authorization code for credentials
     flow = GoogleCalendarService.get_oauth_flow()
     # The redirect_uri must match the one used in the auth URL
@@ -134,8 +173,12 @@ async def oauth_google_callback(code: str, state: str):
     except Exception as e:
         logger.exception("OAuth token exchange failed for user %s: %s", user_id, e)
         # Send a generic, user-friendly message (avoid raw exception text)
-        await bot.send_message(chat_id, "❌ Authorization failed during token exchange. Please try again.")
-        raise HTTPException(status_code=500, detail="Failed to exchange authorization code for token.")
+        await bot.send_message(
+            chat_id, "❌ Authorization failed during token exchange. Please try again."
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to exchange authorization code for token."
+        )
 
     creds = flow.credentials
 
@@ -143,20 +186,27 @@ async def oauth_google_callback(code: str, state: str):
     try:
         async with get_session() as session:
             await GoogleCalendarService.store_credentials(session, user_id, creds)
-        logger.info("Successfully stored Google Calendar credentials for user %s", user_id)
+        logger.info(
+            "Successfully stored Google Calendar credentials for user %s", user_id
+        )
 
         # 4. Notify the user in Telegram
         await bot.send_message(
             chat_id,
-            "✅ Google Calendar connected successfully! I can now help you manage your events."
+            "✅ Google Calendar connected successfully! I can now help you manage your events.",
         )
 
         return JSONResponse({"status": "success"}, status_code=200)
 
     except Exception as e:
         # Log detailed error, but present generic message to the user
-        logger.exception("Failed to store Google credentials for user %s: %s", user_id, e)
-        await bot.send_message(chat_id, "❌ Authorization succeeded but saving credentials failed. Please try again.")
+        logger.exception(
+            "Failed to store Google credentials for user %s: %s", user_id, e
+        )
+        await bot.send_message(
+            chat_id,
+            "❌ Authorization succeeded but saving credentials failed. Please try again.",
+        )
         raise HTTPException(status_code=500, detail="Failed to store credentials.")
 
 
@@ -166,7 +216,9 @@ async def health():
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "scheduler_running": scheduler.running if scheduler else False,
-        "jobs_count": len(scheduler.get_jobs()) if scheduler and scheduler.running else 0,
+        "jobs_count": (
+            len(scheduler.get_jobs()) if scheduler and scheduler.running else 0
+        ),
     }
 
 
@@ -175,12 +227,12 @@ async def metrics(session: AsyncSession = Depends(get_session)):
     """Basic metrics endpoint."""
     if not settings.ENABLE_METRICS:
         raise HTTPException(status_code=404)
-    
+
     from sqlmodel import select, func
-    
+
     user_count = (await session.execute(select(func.count(User.id)))).scalar_one()
     episode_count = (await session.execute(select(func.count(Episode.id)))).scalar_one()
-    
+
     return {
         "total_users": user_count,
         "total_episodes": episode_count,
@@ -193,7 +245,9 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
-    if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.TELEGRAM_WEBHOOK_SECRET or ""):
+    if not hmac.compare_digest(
+        x_telegram_bot_api_secret_token or "", settings.TELEGRAM_WEBHOOK_SECRET or ""
+    ):
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     data: Dict[str, Any] = await request.json()
