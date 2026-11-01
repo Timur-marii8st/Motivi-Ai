@@ -1,5 +1,7 @@
 # Motivi_AI
 
+[Engineering walkthrough and six reproducible memory checks](docs/ENGINEERING_CASE.md) · [Разбор архитектуры и проверки памяти](docs/ENGINEERING_CASE.md)
+
 <div align="center">
 
 [🇺🇸 **English Version**](#english-version) | [🇷🇺 **Русская версия**](#русская-версия)
@@ -76,8 +78,8 @@
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/yourusername/motivi_ai.git
-    cd motivi_ai
+    git clone https://github.com/Timur-marii8st/Motivi-Ai.git
+    cd Motivi-Ai
     ```
 
 2.  **Environment Configuration:**
@@ -279,8 +281,8 @@ Key env variables (see `.env.example` for the full list):
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/yourusername/motivi_ai.git
-    cd motivi_ai
+    git clone https://github.com/Timur-marii8st/Motivi-Ai.git
+    cd Motivi-Ai
     ```
 
 2.  **Настройка окружения:**
